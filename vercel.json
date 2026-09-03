@@ -2,6 +2,7 @@
   "version": 2,
   "buildCommand": "npm run vercel-build",
   "outputDirectory": "client/dist",
+  "regions": ["sin1"],
   "functions": {
     "api/index.ts": {
       "memory": 1024,
