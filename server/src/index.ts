@@ -39,17 +39,22 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
-// Mount official API routes
-app.use('/api/auth', authRoutes);
-app.use('/api/cases', caseRoutes);
-app.use('/api/documents', documentRoutes);
-app.use('/api/evidence', evidenceRoutes);
-app.use('/api/hierarchy', hierarchyRoutes);
-app.use('/api/search', searchRoutes);
-app.use('/api/ai', aiRoutes);
-app.use('/api/audit-logs', auditRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/notifications', notificationRoutes);
+// Mount official API routes (both /api and root to guarantee serverless rewrite compatibility)
+const mountOfficialRoutes = (prefix: string) => {
+  app.use(`${prefix}/auth`, authRoutes);
+  app.use(`${prefix}/cases`, caseRoutes);
+  app.use(`${prefix}/documents`, documentRoutes);
+  app.use(`${prefix}/evidence`, evidenceRoutes);
+  app.use(`${prefix}/hierarchy`, hierarchyRoutes);
+  app.use(`${prefix}/search`, searchRoutes);
+  app.use(`${prefix}/ai`, aiRoutes);
+  app.use(`${prefix}/audit-logs`, auditRoutes);
+  app.use(`${prefix}/users`, userRoutes);
+  app.use(`${prefix}/notifications`, notificationRoutes);
+};
+
+mountOfficialRoutes('/api');
+mountOfficialRoutes('');
 
 // Locate combined frontend client distribution
 const possibleDistPaths = [
