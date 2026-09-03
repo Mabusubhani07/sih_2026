@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: diemp-investigation-platform
+    env: node
+    plan: free
+    buildCommand: cd server && npm install && npx prisma generate && npx prisma db push && npm run seed && npm run build && cd ../client && npm install && npm run build
+    startCommand: cd server && node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        value: file:./dev.db
+      - key: JWT_SECRET
+        generateValue: true
+      - key: STORAGE_PROVIDER
+        value: LOCAL
+      - key: LOCAL_STORAGE_DIR
+        value: ./uploads

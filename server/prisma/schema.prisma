@@ -1,0 +1,246 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id          String       @id @default(uuid())
+  code        String       @unique // e.g. "SID" (State Investigation Department)
+  name        String
+  description String?
+  departments Department[]
+  createdAt   DateTime     @default(now())
+}
+
+model Department {
+  id             String        @id @default(uuid())
+  code           String        @unique // POLICE, INVESTIGATION, FORENSICS, LEGAL, JUDICIARY, ADMIN
+  name           String
+  description    String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  users          User[]
+  cases          Case[]
+  documents      Document[]
+  createdAt      DateTime      @default(now())
+}
+
+model User {
+  id              String           @id @default(uuid())
+  email           String           @unique
+  passwordHash    String
+  name            String
+  badgeNumber     String           @unique
+  role            String // ADMIN, POLICE_OFFICER, INVESTIGATOR, FORENSIC_OFFICER, LEGAL_OFFICER, COURT_USER
+  departmentId    String
+  department      Department       @relation(fields: [departmentId], references: [id])
+  status          String           @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED
+  avatarUrl       String?
+  phone           String?
+  lastLogin       DateTime?
+  createdCases    Case[]           @relation("CaseCreator")
+  assignedCases   Case[]           @relation("CaseInvestigator")
+  caseMemberships CaseMembership[]
+  uploadedDocs    Document[]       @relation("DocumentCreator")
+  uploadedVersions DocumentVersion[] @relation("VersionUploader")
+  sharesGiven     DocumentShare[]  @relation("SharedBy")
+  sharesReceived  DocumentShare[]  @relation("SharedWith")
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model Case {
+  id                   String           @id @default(uuid())
+  caseNumber           String           @unique // e.g. CASE-2026-00421
+  firNumber            String           @unique // e.g. FIR/2026/0187
+  title                String
+  description          String
+  crimeCategory        String // Cyber Fraud, Financial Crimes, Homicide, Narcotics, Theft, Public Order, Forensic Analysis
+  policeStation        String
+  jurisdiction         String
+  incidentDate         DateTime
+  incidentLocation     String
+  registeredDate       DateTime         @default(now())
+  priority             String           @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  status               String           @default("UNDER_INVESTIGATION") // REGISTERED, UNDER_INVESTIGATION, FORENSIC_ANALYSIS, LEGAL_REVIEW, COURT_SUBMITTED, CLOSED
+  assignedDepartmentId String
+  assignedDepartment   Department       @relation(fields: [assignedDepartmentId], references: [id])
+  leadInvestigatorId   String?
+  leadInvestigator     User?            @relation("CaseInvestigator", fields: [leadInvestigatorId], references: [id])
+  createdById          String
+  createdBy            User             @relation("CaseCreator", fields: [createdById], references: [id])
+  memberships          CaseMembership[]
+  documents            Document[]
+  evidenceItems        Evidence[]
+  auditLogs            AuditLog[]
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+}
+
+model CaseMembership {
+  id        String   @id @default(uuid())
+  caseId    String
+  case      Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleInCase String // LEAD_INVESTIGATOR, INVESTIGATOR, FORENSIC_ANALYST, LEGAL_COUNSEL, OBSERVER
+  addedAt   DateTime @default(now())
+
+  @@unique([caseId, userId])
+}
+
+model Document {
+  id                   String            @id @default(uuid())
+  documentNumber       String            @unique // e.g. DOC-2026-00892
+  caseId               String
+  case                 Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  title                String
+  documentType         String // FIR, POLICE_REPORT, INVESTIGATION_REPORT, EVIDENCE, FORENSIC_REPORT, WITNESS_STATEMENT, LEGAL_DOCUMENT, COURT_DOCUMENT, OTHER
+  subCategory          String?           // e.g. "Cyber Forensics", "Questioned Documents", "Crime Scene Panchnama", "Biological Analysis", "Bank Invoices"
+  departmentId         String
+  department           Department        @relation(fields: [departmentId], references: [id])
+  status               String            @default("ACTIVE") // ACTIVE, ARCHIVED, INVALID
+  processingStatus     String            @default("READY") // UPLOADED, PROCESSING, OCR_COMPLETE, CLASSIFIED, METADATA_EXTRACTED, INDEXED, READY, PROCESSING_FAILED
+  processingError      String?
+  ocrText              String?           // Extracted / OCR text
+  isOcrProcessed       Boolean           @default(false)
+  invalidReason        String?
+  archivedReason       String?
+  classificationReason String?
+  isConfidential       Boolean           @default(false)
+  currentVersionNumber Int               @default(1)
+  createdById          String
+  createdBy            User              @relation("DocumentCreator", fields: [createdById], references: [id])
+  versions             DocumentVersion[]
+  shares               DocumentShare[]
+  evidence             Evidence[]
+  metadata             DocumentMetadata?
+  auditLogs            AuditLog[]
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+}
+
+model DocumentMetadata {
+  id                 String    @id @default(uuid())
+  documentId         String    @unique
+  document           Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  caseNumber         String?
+  firNumber          String?
+  referenceNumber    String?
+  documentDate       DateTime?
+  issuingAuthority   String?
+  departmentName     String?
+  location           String?
+  language           String?   @default("en")
+  entities           String?   // JSON string: extracted names, accounts, IPs, tokens
+  keywords           String?   // JSON string: extracted keyword tags
+  categoryConfidence Float?
+  isVerified         Boolean   @default(false)
+  verifiedById       String?
+  verifiedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+model DocumentVersion {
+  id               String    @id @default(uuid())
+  documentId       String
+  document         Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  versionNumber    Int
+  fileName         String
+  originalFileName String
+  mimeType         String
+  fileSize         Int
+  storagePath      String
+  sha256Hash       String
+  hashAlgorithm    String    @default("SHA-256")
+  changeSummary    String?
+  subCategory      String?
+  extractedText    String? // Stored extracted/OCR text for search and AI summary
+  uploadedById     String
+  uploadedBy       User      @relation("VersionUploader", fields: [uploadedById], references: [id])
+  createdAt        DateTime  @default(now())
+
+  @@unique([documentId, versionNumber])
+}
+
+model DocumentShare {
+  id               String    @id @default(uuid())
+  documentId       String
+  document         Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sharedWithUserId String
+  sharedWithUser   User      @relation("SharedWith", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+  sharedByUserId   String
+  sharedByUser     User      @relation("SharedBy", fields: [sharedByUserId], references: [id])
+  permission       String    @default("VIEW") // VIEW, DOWNLOAD
+  notes            String?
+  expiresAt        DateTime?
+  revokedAt        DateTime?
+  revokedByUserId  String?
+  createdAt        DateTime  @default(now())
+
+  @@index([documentId, sharedWithUserId])
+}
+
+model Evidence {
+  id              String    @id @default(uuid())
+  evidenceNumber  String    @unique // e.g. EVD-2026-00482
+  caseId          String
+  case            Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  documentId      String?
+  document        Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  title           String
+  description     String
+  category        String // DIGITAL, BIOLOGICAL, PHYSICAL_ITEM, BALLISTICS, DOCUMENTARY, TRACE
+  collectedDate   DateTime
+  collectedBy     String
+  custodyLocation String
+  integrityStatus String    @default("VERIFIED") // VERIFIED, PENDING_ANALYSIS, COMPROMISED
+  currentStatus   String    @default("IN_CUSTODY") // COLLECTED, IN_CUSTODY, LAB_ANALYSIS, COURT_SUBMITTED, DISPOSED
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  eventId    String   @unique // e.g. AUD-2026-09281
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userRole   String
+  action     String // LOGIN, LOGOUT, CASE_CREATED, CASE_UPDATED, DOCUMENT_UPLOADED, DOCUMENT_VIEWED, DOCUMENT_DOWNLOADED, DOCUMENT_SHARED, SHARE_REVOKED, DOCUMENT_UPDATED, VERSION_CREATED, DOCUMENT_ARCHIVED, DOCUMENT_INVALIDATED, INTEGRITY_CHECK, AI_SUMMARY_GENERATED
+  caseId     String?
+  case       Case?    @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  status     String   @default("SUCCESS") // SUCCESS, FAILURE, DENIED
+  ipAddress  String?
+  userAgent  String?
+  details    String? // JSON string containing details of change/action
+  timestamp  DateTime @default(now())
+
+  @@index([action, timestamp])
+  @@index([caseId])
+  @@index([documentId])
+  @@index([userId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String // CASE_UPDATE, SHARE, VERSION, INTEGRITY, SYSTEM
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}

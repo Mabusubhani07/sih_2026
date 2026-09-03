@@ -1,0 +1,20 @@
+{
+  "name": "diemp-government-investigation-platform",
+  "version": "1.0.0",
+  "description": "Government Digital Investigation and Document Management Platform",
+  "private": true,
+  "scripts": {
+    "start": "cd server && npm.cmd start",
+    "dev": "concurrently -k -p \"[{name}]\" -n \"SERVER,CLIENT\" -c \"blue.bold,green.bold\" \"cd server && npm.cmd run dev\" \"cd client && npm.cmd run dev\"",
+    "dev:server": "cd server && npm.cmd run dev",
+    "dev:client": "cd client && npm.cmd run dev",
+    "build": "cd server && npm.cmd run build && cd ../client && npm.cmd run build",
+    "seed": "cd server && npm.cmd run seed",
+    "install:all": "npm.cmd install && cd server && npm.cmd install && cd ../client && npm.cmd install",
+    "build:prod": "cd server && npm install && npx prisma generate && npx prisma db push && npm run build && cd ../client && npm install && npm run build",
+    "start:prod": "cd server && node dist/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
