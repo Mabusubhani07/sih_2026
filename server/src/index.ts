@@ -30,9 +30,19 @@ const uploadsDir = path.resolve(process.cwd(), process.env.LOCAL_STORAGE_DIR || 
 app.use('/uploads', express.static(uploadsDir));
 
 // System Healthcheck
-app.get('/api/health', (_req: Request, res: Response) => {
+app.get(['/api/health', '/health'], async (_req: Request, res: Response) => {
+  let dbStatus = 'UNKNOWN';
+  try {
+    const { prisma } = await import('./prisma');
+    const userCount = await prisma.user.count();
+    dbStatus = `CONNECTED (users: ${userCount})`;
+  } catch (err: any) {
+    dbStatus = `FAILED: ${err.message}`;
+  }
+
   res.json({
     status: 'OPERATIONAL',
+    database: dbStatus,
     system: 'DIEMP - Digital Investigation & Evidence Management Platform',
     timestamp: new Date().toISOString(),
     version: '1.0.0-PROD',
