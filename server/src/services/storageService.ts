@@ -69,8 +69,11 @@ class S3StorageService implements IStorageService {
   constructor() {
     this.localFallback = new LocalStorageService();
     this.bucket = process.env.AWS_S3_BUCKET || 'diemp-investigation-documents';
+    const endpoint = process.env.AWS_ENDPOINT_URL || process.env.S3_ENDPOINT;
     this.s3Client = new S3Client({
       region: process.env.AWS_REGION || 'us-east-1',
+      endpoint: endpoint || undefined,
+      forcePathStyle: Boolean(endpoint),
       credentials: process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY ? {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,

@@ -84,12 +84,17 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`================================================================`);
-  console.log(` DIEMP Official Investigation Platform Backend`);
-  console.log(` Service Port: ${PORT}`);
-  console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(` Database: SQLite (dev.db) via Prisma ORM`);
-  console.log(` Storage: ${process.env.STORAGE_PROVIDER || 'LOCAL'} (${uploadsDir})`);
-  console.log(`================================================================`);
-});
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`================================================================`);
+    console.log(` DIEMP Official Investigation Platform Backend`);
+    console.log(` Service Port: ${PORT}`);
+    console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(` Database: PostgreSQL via Prisma ORM`);
+    console.log(` Storage: ${process.env.STORAGE_PROVIDER || 'LOCAL'} (${uploadsDir})`);
+    console.log(`================================================================`);
+  });
+}
+
+export default app;
+export { app };
