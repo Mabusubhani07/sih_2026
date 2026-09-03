@@ -26,8 +26,11 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Static file hosting for local document preview (PDF/images)
-const uploadsDir = path.resolve(process.cwd(), process.env.LOCAL_STORAGE_DIR || './uploads');
-app.use('/uploads', express.static(uploadsDir));
+const defaultUploads = process.env.VERCEL === '1' ? '/tmp/uploads' : './uploads';
+const uploadsDir = path.resolve(process.env.LOCAL_STORAGE_DIR || defaultUploads);
+if (fs.existsSync(uploadsDir)) {
+  app.use('/uploads', express.static(uploadsDir));
+}
 
 // System Healthcheck
 app.get(['/api/health', '/health'], async (_req: Request, res: Response) => {

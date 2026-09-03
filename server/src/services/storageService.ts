@@ -21,9 +21,14 @@ class LocalStorageService implements IStorageService {
   private baseDir: string;
 
   constructor() {
-    this.baseDir = path.resolve(process.cwd(), process.env.LOCAL_STORAGE_DIR || './uploads');
-    if (!fs.existsSync(this.baseDir)) {
-      fs.mkdirSync(this.baseDir, { recursive: true });
+    const defaultDir = process.env.VERCEL === '1' ? '/tmp/uploads' : './uploads';
+    this.baseDir = path.resolve(process.env.LOCAL_STORAGE_DIR || defaultDir);
+    try {
+      if (!fs.existsSync(this.baseDir)) {
+        fs.mkdirSync(this.baseDir, { recursive: true });
+      }
+    } catch (err) {
+      console.warn('[Storage] Could not create local storage directory (read-only filesystem):', err);
     }
   }
 
