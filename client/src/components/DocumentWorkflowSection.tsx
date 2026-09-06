@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   ArrowRight,
   ArrowDown,
+  ArrowLeft,
 } from 'lucide-react';
 
 interface Stage {
@@ -36,7 +37,8 @@ const STAGES: Stage[] = [
 
 export const DocumentWorkflowSection: React.FC = () => {
   const row1 = STAGES.slice(0, 5);
-  const row2 = STAGES.slice(5, 10);
+  // Row 2 layout: 10 <- 09 <- 08 <- 07 <- 06 (desktop snake flow)
+  const row2Desktop = [STAGES[9], STAGES[8], STAGES[7], STAGES[6], STAGES[5]];
 
   return (
     <section id="workflow-section" className="py-12 sm:py-16 bg-white border-b border-slate-200/70">
@@ -76,26 +78,50 @@ export const DocumentWorkflowSection: React.FC = () => {
                   </div>
                 </div>
                 {idx < 4 && (
-                  <div className="px-1.5 shrink-0 text-slate-300">
-                    <ArrowRight className="w-3.5 h-3.5" />
+                  <div className="px-1.5 shrink-0 relative flex items-center justify-center w-6">
+                    <div className="w-full h-[1.5px] bg-slate-200" />
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-400 absolute" />
+                    {/* Flow Indicator Dot */}
+                    <div
+                      className="absolute w-2 h-2 rounded-full bg-[#1B56CA] pointer-events-none workflow-indicator-right"
+                      style={{ animationDelay: `${idx * 0.35}s` }}
+                    />
                   </div>
                 )}
               </div>
             ))}
           </div>
 
-          {/* Row Progression Transition Arrow */}
-          <div className="flex justify-end pr-8 py-1">
-            <div className="flex items-center space-x-1 text-[10px] text-slate-400 font-mono">
-              <span className="text-[9px] uppercase tracking-wider text-slate-400">Pipeline Progression</span>
-              <ArrowDown className="w-3 h-3 text-[#1B56CA]" />
+          {/* Row Progression Transition Arrow (05 Down to 06 at column 5) */}
+          <div className="grid grid-cols-5 gap-2.5 xl:gap-3 py-1">
+            <div className="col-start-5 flex items-center justify-center">
+              <div className="flex items-center space-x-2 text-[10px] text-slate-400 font-mono">
+                <span className="text-[9px] uppercase tracking-wider text-slate-400">Progression</span>
+                <div className="relative w-4 h-7 flex items-center justify-center">
+                  <div className="h-full w-[1.5px] bg-slate-200" />
+                  <ArrowDown className="w-3.5 h-3.5 text-[#1B56CA] absolute bottom-0" />
+                  {/* Flow Indicator Dot Down */}
+                  <div
+                    className="absolute w-2 h-2 rounded-full bg-[#1B56CA] pointer-events-none workflow-indicator-down"
+                    style={{ animationDelay: '1.4s' }}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Row 2: 06 -> 07 -> 08 -> 09 -> 10 */}
+          {/* Row 2: 10 <- 09 <- 08 <- 07 <- 06 */}
           <div className="grid grid-cols-5 gap-2.5 xl:gap-3 items-center">
-            {row2.map((stage, idx) => {
+            {row2Desktop.map((stage, idx) => {
               const isReady = stage.step === '10';
+
+              // Connector delay moving backwards from 06 to 10
+              // idx 3 is between 07 and 06 -> delay 1.75s
+              // idx 2 is between 08 and 07 -> delay 2.10s
+              // idx 1 is between 09 and 08 -> delay 2.45s
+              // idx 0 is between 10 and 09 -> delay 2.80s
+              const connectorDelay = `${1.75 + (3 - idx) * 0.35}s`;
+
               return (
                 <div key={stage.step} className="flex items-center">
                   <div
@@ -106,7 +132,9 @@ export const DocumentWorkflowSection: React.FC = () => {
                     <div className="flex items-center justify-between">
                       <span
                         className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                          isReady ? 'text-emerald-700 bg-emerald-100/70' : 'text-[#1B56CA] bg-[#EBF3FE]'
+                          isReady
+                            ? 'text-emerald-700 bg-emerald-100/70 step-ready-arrival'
+                            : 'text-[#1B56CA] bg-[#EBF3FE]'
                         }`}
                       >
                         {stage.step}
@@ -128,9 +156,16 @@ export const DocumentWorkflowSection: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
                   {idx < 4 && (
-                    <div className="px-1.5 shrink-0 text-slate-300">
-                      <ArrowRight className="w-3.5 h-3.5" />
+                    <div className="px-1.5 shrink-0 relative flex items-center justify-center w-6">
+                      <div className="w-full h-[1.5px] bg-slate-200" />
+                      <ArrowLeft className="w-3.5 h-3.5 text-slate-400 absolute" />
+                      {/* Flow Indicator Dot moving right to left */}
+                      <div
+                        className="absolute w-2 h-2 rounded-full bg-[#1B56CA] pointer-events-none workflow-indicator-left"
+                        style={{ animationDelay: connectorDelay }}
+                      />
                     </div>
                   )}
                 </div>
@@ -146,7 +181,7 @@ export const DocumentWorkflowSection: React.FC = () => {
             return (
               <div
                 key={stage.step}
-                className={`bg-white border rounded-[6px] p-3.5 shadow-2xs flex items-start space-x-3 ${
+                className={`bg-white border rounded-[6px] p-3.5 shadow-2xs flex items-start space-x-3 transition hover:border-slate-300 ${
                   isReady ? 'border-emerald-300 bg-emerald-50/20' : 'border-slate-200/90'
                 }`}
               >
@@ -159,7 +194,11 @@ export const DocumentWorkflowSection: React.FC = () => {
                 </div>
                 <div>
                   <div className="flex items-center space-x-2">
-                    <span className="text-[10px] font-mono font-bold text-slate-400">
+                    <span
+                      className={`text-[10px] font-mono font-bold ${
+                        isReady ? 'text-emerald-700 step-ready-arrival' : 'text-slate-500'
+                      }`}
+                    >
                       STAGE {stage.step}
                     </span>
                   </div>
@@ -177,6 +216,9 @@ export const DocumentWorkflowSection: React.FC = () => {
 
         {/* Mobile Vertical Timeline Layout (< 640px e.g. 390px) */}
         <div className="sm:hidden relative pl-6 space-y-3.5 before:content-[''] before:absolute before:top-2 before:bottom-2 before:left-2.5 before:w-0.5 before:bg-slate-200">
+          {/* Animated vertical flow indicator descending down the timeline */}
+          <div className="timeline-flow-indicator pointer-events-none" />
+
           {STAGES.map((stage) => {
             const isReady = stage.step === '10';
             return (
@@ -196,7 +238,7 @@ export const DocumentWorkflowSection: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <span
                       className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                        isReady ? 'text-emerald-700 bg-emerald-100' : 'text-[#1B56CA] bg-[#EBF3FE]'
+                        isReady ? 'text-emerald-700 bg-emerald-100 step-ready-arrival' : 'text-[#1B56CA] bg-[#EBF3FE]'
                       }`}
                     >
                       STAGE {stage.step}

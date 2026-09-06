@@ -1,199 +1,292 @@
+import { PDFParse } from 'pdf-parse';
+import mammoth from 'mammoth';
+import { OCRService } from './ocrService';
+
 export interface ExtractionResult {
   text: string;
   isOcr: boolean;
-  pageCount?: number;
+  pageCount: number;
   confidence: number;
-  method: 'NATIVE_TEXT' | 'LOCAL_OCR' | 'PDF_STREAM' | 'XML_PARSER' | 'FALLBACK';
+  method: 'NATIVE_TEXT' | 'OCR_TESSERACT' | 'OCR_TEXTRACT' | 'DOCX_PARSER';
+  language?: string;
+}
+
+export interface ExtractionOptions {
+  language?: string;
+  documentId?: string;
+  versionNumber?: number;
 }
 
 export class TextExtractionService {
   /**
-   * Extracts text from raw buffer according to file extension and MIME type
+   * Extracts actual text from raw document bytes according to file type and content.
+   * NEVER returns simulated, fake, or placeholder text.
+   * If extraction or OCR fails, throws an honest, descriptive Error.
    */
   static async extractText(
     buffer: Buffer,
     fileName: string,
-    mimeType: string
+    mimeType: string,
+    options?: ExtractionOptions
   ): Promise<ExtractionResult> {
-    const ext = (fileName.split('.').pop() || '').toLowerCase();
-
-    // 1. Plain Text / Markdown / JSON
-    if (ext === 'txt' || mimeType.startsWith('text/') || ext === 'json' || ext === 'csv') {
-      try {
-        const text = buffer.toString('utf-8');
-        return {
-          text,
-          isOcr: false,
-          confidence: 1.0,
-          method: 'NATIVE_TEXT',
-        };
-      } catch (err: any) {
-        // Fallback to latin1 if utf-8 fails
-        const text = buffer.toString('latin1');
-        return {
-          text,
-          isOcr: false,
-          confidence: 0.85,
-          method: 'NATIVE_TEXT',
-        };
-      }
+    if (!buffer || buffer.length === 0) {
+      throw new Error('Unable to extract text from this document: File payload is empty (0 bytes).');
     }
 
-    // 2. PDF Documents (Extract text stream or scan)
-    if (ext === 'pdf' || mimeType.includes('pdf')) {
-      return this.extractFromPdf(buffer);
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    const mime = (mimeType || '').toLowerCase();
+
+    console.log(
+      `[OCR] Document extraction initiated: "${fileName}" (extension: .${ext}, mime: ${mime}, size: ${buffer.length} bytes)`
+    );
+
+    // 1. Plain Text / Markdown / CSV / JSON
+    if (
+      ext === 'txt' ||
+      ext === 'csv' ||
+      ext === 'json' ||
+      ext === 'md' ||
+      ext === 'log' ||
+      mime.startsWith('text/') ||
+      mime === 'application/json' ||
+      mime === 'text/csv'
+    ) {
+      return this.extractFromPlainText(buffer, fileName);
+    }
+
+    // 2. PDF Documents: Native Text first -> Scanned Multi-Page OCR fallback
+    if (ext === 'pdf' || mime.includes('pdf')) {
+      return this.extractFromPdf(buffer, fileName, options);
     }
 
     // 3. Word Documents (.docx)
-    if (ext === 'docx' || mimeType.includes('wordprocessingml')) {
-      return this.extractFromDocx(buffer);
+    if (ext === 'docx' || mime.includes('wordprocessingml.document')) {
+      return this.extractFromDocx(buffer, fileName);
     }
 
-    // 4. Scanned Images (.jpg, .jpeg, .png) -> Local OCR Extraction
-    if (ext === 'jpg' || ext === 'jpeg' || ext === 'png' || mimeType.startsWith('image/')) {
-      return this.extractFromImageWithOcr(buffer, fileName);
+    // 4. Scanned Images (.jpg, .jpeg, .png, .webp, .tiff, .bmp) -> Real OCR
+    if (
+      ext === 'jpg' ||
+      ext === 'jpeg' ||
+      ext === 'png' ||
+      ext === 'webp' ||
+      ext === 'tiff' ||
+      ext === 'bmp' ||
+      mime.startsWith('image/')
+    ) {
+      return this.extractFromImage(buffer, fileName, options);
     }
 
-    // Default fallback
+    // Unsupported format
+    throw new Error(
+      `Unable to extract text from this document: Unsupported document format "${mimeType || fileName}".`
+    );
+  }
+
+  /**
+   * Plain text extraction (TXT, CSV, JSON, LOG, MD)
+   */
+  private static extractFromPlainText(buffer: Buffer, fileName: string): ExtractionResult {
+    let text = '';
+    try {
+      text = buffer.toString('utf-8');
+    } catch {
+      text = buffer.toString('latin1');
+    }
+
+    // Sanitize null bytes or non-printable controls (preserve \n, \r, \t)
+    const cleanedText = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').trim();
+
+    if (cleanedText.length === 0) {
+      throw new Error(`Unable to extract text from "${fileName}": File is empty or contains no readable characters.`);
+    }
+
+    console.log(
+      `[OCR] Native plain text extraction completed (${cleanedText.length} characters, method: NATIVE_TEXT)`
+    );
+
     return {
-      text: buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').trim(),
+      text: cleanedText,
       isOcr: false,
-      confidence: 0.5,
-      method: 'FALLBACK',
+      pageCount: 1,
+      confidence: 1.0,
+      method: 'NATIVE_TEXT',
     };
   }
 
   /**
-   * PDF native text stream extraction
+   * PDF Extraction:
+   * First attempts native PDF text stream extraction.
+   * If PDF contains no machine-readable text (scanned/image PDF), runs real multi-page OCR.
    */
-  private static extractFromPdf(buffer: Buffer): ExtractionResult {
+  private static async extractFromPdf(
+    buffer: Buffer,
+    fileName: string,
+    options?: ExtractionOptions
+  ): Promise<ExtractionResult> {
+    const parser = new PDFParse({ data: buffer });
     try {
-      const raw = buffer.toString('binary');
-      const textPieces: string[] = [];
+      // Step 1: Attempt native text extraction
+      const textResult = await parser.getText();
+      const rawText = textResult.text || '';
+      const cleanText = rawText
+        .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '') // Remove synthetic page footer tokens from parser
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+        .trim();
 
-      // Extract text from text blocks BT ... ET
-      const btRegex = /BT[\s\S]*?ET/g;
-      let match: RegExpExecArray | null;
-      while ((match = btRegex.exec(raw)) !== null) {
-        const block = match[0];
-        // Match string literals (text) or hex <...>
-        const strRegex = /\(([^)]*)\)\s*T[jJ]/g;
-        let strMatch: RegExpExecArray | null;
-        while ((strMatch = strRegex.exec(block)) !== null) {
-          textPieces.push(strMatch[1]);
-        }
+      const pageCount = textResult.total || (textResult.pages ? textResult.pages.length : 1);
 
-        // Match array of strings: [(...) ... (...)] TJ
-        const arrRegex = /\[(.*?)\]\s*TJ/g;
-        let arrMatch: RegExpExecArray | null;
-        while ((arrMatch = arrRegex.exec(block)) !== null) {
-          const inner = arrMatch[1];
-          const innerStrRegex = /\(([^)]*)\)/g;
-          let ism: RegExpExecArray | null;
-          while ((ism = innerStrRegex.exec(inner)) !== null) {
-            textPieces.push(ism[1]);
+      // If meaningful native text is found (> 20 characters), return native text extraction
+      if (cleanText.length > 20) {
+        console.log(
+          `[OCR] Native PDF text extraction successful (${cleanText.length} characters across ${pageCount} page(s), method: NATIVE_TEXT). Skipping OCR.`
+        );
+        return {
+          text: cleanText,
+          isOcr: false,
+          pageCount,
+          confidence: 0.98,
+          method: 'NATIVE_TEXT',
+        };
+      }
+
+      // Step 2: Scanned / image-only PDF detected -> Multi-Page OCR
+      console.log(
+        `[OCR] PDF "${fileName}" contains negligible native text (${cleanText.length} chars). Detected scanned/image-only PDF; initiating multi-page optical recognition...`
+      );
+
+      const pageImages: Buffer[] = [];
+
+      // Extract page renders or embedded images
+      try {
+        const screenshots = await parser.getScreenshot({ imageBuffer: true });
+        if (screenshots && screenshots.pages && screenshots.pages.length > 0) {
+          for (const page of screenshots.pages) {
+            if (page.data && page.data.length > 0) {
+              pageImages.push(Buffer.from(page.data));
+            }
           }
         }
+      } catch (renderErr: any) {
+        console.warn('[OCR] PDF page rendering warning:', renderErr.message);
       }
 
-      const extracted = textPieces.join(' ').replace(/\\([()\\])/g, '$1').trim();
-
-      if (extracted.length > 20) {
-        return {
-          text: extracted,
-          isOcr: false,
-          confidence: 0.95,
-          method: 'PDF_STREAM',
-        };
+      // If page screenshots could not be rendered, try extracting embedded images
+      if (pageImages.length === 0) {
+        try {
+          const embedded = await parser.getImage({ imageBuffer: true });
+          if (embedded && embedded.pages && embedded.pages.length > 0) {
+            for (const p of embedded.pages) {
+              if (p.images && p.images.length > 0) {
+                for (const img of p.images) {
+                  if (img.data && img.data.length > 0) {
+                    pageImages.push(Buffer.from(img.data));
+                  }
+                }
+              }
+            }
+          }
+        } catch (imgErr: any) {
+          console.warn('[OCR] PDF embedded image extraction warning:', imgErr.message);
+        }
       }
 
-      // If PDF has no embedded text stream, it is likely a scanned PDF; run image/scanned analyzer
-      const fallbackText = this.simulateOcrOnScannedDoc(buffer, 'Scanned PDF Exhibit');
+      if (pageImages.length === 0) {
+        throw new Error(
+          `Unable to extract text from scanned PDF "${fileName}": No extractable page images or native text stream found.`
+        );
+      }
+
+      // Run real OCR across every page in sequential order
+      const ocrResult = await OCRService.recognizePages(pageImages, options?.language);
+
+      if (!ocrResult.text || ocrResult.text.trim().length === 0) {
+        throw new Error(
+          `Unable to extract text from scanned PDF "${fileName}": Optical character recognition found no readable text across ${pageImages.length} page(s).`
+        );
+      }
+
       return {
-        text: fallbackText,
+        text: ocrResult.text,
         isOcr: true,
-        confidence: 0.88,
-        method: 'LOCAL_OCR',
+        pageCount: ocrResult.pageCount,
+        confidence: ocrResult.confidence,
+        method: ocrResult.provider === 'AMAZON_TEXTRACT' ? 'OCR_TEXTRACT' : 'OCR_TESSERACT',
+        language: ocrResult.language,
       };
-    } catch (err) {
-      return {
-        text: '[PDF Text Extraction Completed - Scanned Document Registered]',
-        isOcr: true,
-        confidence: 0.7,
-        method: 'LOCAL_OCR',
-      };
+    } catch (err: any) {
+      console.error(`[OCR] PDF extraction error for "${fileName}":`, err.message);
+      throw new Error(`Unable to extract text from PDF "${fileName}": ${err.message}`);
+    } finally {
+      try {
+        await parser.destroy();
+      } catch {
+        // Ignore destroy error
+      }
     }
   }
 
   /**
-   * DOCX XML stream extractor without heavy external dependencies
+   * Microsoft Word (.docx) Extraction using Mammoth
    */
-  private static extractFromDocx(buffer: Buffer): ExtractionResult {
+  private static async extractFromDocx(buffer: Buffer, fileName: string): Promise<ExtractionResult> {
     try {
-      const raw = buffer.toString('utf-8');
-      const pieces: string[] = [];
-      const textRegex = /<w:t[^>]*>([^<]+)<\/w:t>/g;
-      let match: RegExpExecArray | null;
-      while ((match = textRegex.exec(raw)) !== null) {
-        pieces.push(match[1]);
+      const result = await mammoth.extractRawText({ buffer });
+      const text = (result.value || '').trim();
+
+      if (text.length === 0) {
+        throw new Error(`Unable to extract text from DOCX "${fileName}": Document contains no extractable body text.`);
       }
 
-      const joined = pieces.join(' ').trim();
-      if (joined.length > 0) {
-        return {
-          text: joined,
-          isOcr: false,
-          confidence: 0.98,
-          method: 'XML_PARSER',
-        };
-      }
+      console.log(
+        `[OCR] DOCX text extraction completed (${text.length} characters, method: DOCX_PARSER)`
+      );
 
       return {
-        text: buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').trim(),
+        text,
         isOcr: false,
-        confidence: 0.75,
-        method: 'FALLBACK',
+        pageCount: 1,
+        confidence: 0.95,
+        method: 'DOCX_PARSER',
       };
-    } catch (err) {
-      return {
-        text: '[DOCX Document Ingested - Binary Structured Format]',
-        isOcr: false,
-        confidence: 0.7,
-        method: 'FALLBACK',
-      };
+    } catch (err: any) {
+      console.error(`[OCR] DOCX extraction error for "${fileName}":`, err.message);
+      throw new Error(`Unable to extract text from DOCX "${fileName}": ${err.message}`);
     }
   }
 
   /**
-   * Image OCR Extraction (Local OCR Engine)
+   * Image OCR Extraction (PNG, JPEG, JPG, WEBP, TIFF, BMP)
    */
-  private static extractFromImageWithOcr(buffer: Buffer, fileName: string): ExtractionResult {
-    // Generate high-fidelity optical transcript for investigation exhibits
-    const ocrTranscript = this.simulateOcrOnScannedDoc(buffer, fileName);
-    return {
-      text: ocrTranscript,
-      isOcr: true,
-      confidence: 0.92,
-      method: 'LOCAL_OCR',
-    };
-  }
+  private static async extractFromImage(
+    buffer: Buffer,
+    fileName: string,
+    options?: ExtractionOptions
+  ): Promise<ExtractionResult> {
+    try {
+      const ocrResult = await OCRService.recognizeImage(buffer, options?.language);
 
-  /**
-   * Local OCR engine that extracts forensic markers, header tokens, and stamp metadata
-   */
-  private static simulateOcrOnScannedDoc(buffer: Buffer, fileName: string): string {
-    const sizeKb = (buffer.length / 1024).toFixed(1);
-    const dateStr = new Date().toISOString().slice(0, 10);
-    return [
-      `[LOCAL OCR OPTICAL RECOGNITION TRANSCRIPT]`,
-      `Document Reference: ${fileName}`,
-      `Digitized Stream Size: ${sizeKb} KB | Extraction Date: ${dateStr}`,
-      `Classification Seal: OFFICIAL INVESTIGATION EXHIBIT`,
-      `Recognized Text Blocks:`,
-      `- Certified reproduction of official evidentiary record.`,
-      `- Physical seals and statutory endorsements inspected and scanned.`,
-      `- Registered in Department of Police & Digital Forensic Evidence Locker.`,
-      `- Section 65B Electronic Verification Certificate attached.`,
-    ].join('\n');
+      if (!ocrResult.text || ocrResult.text.trim().length === 0) {
+        throw new Error(
+          `Unable to extract text from image "${fileName}": Optical character recognition found no readable text.`
+        );
+      }
+
+      console.log(
+        `[OCR] Image OCR completed (${ocrResult.text.length} characters, confidence: ${ocrResult.confidence.toFixed(1)}%, method: ${ocrResult.provider})`
+      );
+
+      return {
+        text: ocrResult.text,
+        isOcr: true,
+        pageCount: 1,
+        confidence: ocrResult.confidence,
+        method: ocrResult.provider === 'AMAZON_TEXTRACT' ? 'OCR_TEXTRACT' : 'OCR_TESSERACT',
+        language: ocrResult.language,
+      };
+    } catch (err: any) {
+      console.error(`[OCR] Image OCR error for "${fileName}":`, err.message);
+      throw new Error(`Unable to extract text from image "${fileName}": ${err.message}`);
+    }
   }
 }

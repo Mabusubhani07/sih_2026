@@ -22,6 +22,7 @@ yarn-debug.log*
 uploads/*
 server/uploads/*
 !server/uploads/.gitkeep
+*.traineddata
 
 # OS / Editor
 .DS_Store

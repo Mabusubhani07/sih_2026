@@ -94,10 +94,54 @@ export const Login: React.FC = () => {
             </button>
           </form>
 
+          {/* Quick Demo Officer Logins */}
+          <div className="mt-4 pt-3 border-t border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2 text-center">
+              Official Demo Clearance Profiles
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => { setEmail('police@demo.gov'); setPassword('DemoPass@2026'); }}
+                className="text-left px-2 py-1.5 rounded bg-slate-50 hover:bg-blue-50 border border-slate-200 text-slate-700 hover:text-blue-800 transition cursor-pointer"
+              >
+                <div className="font-semibold">Police Officer</div>
+                <div className="text-[10px] text-slate-400">police@demo.gov</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setEmail('investigator@demo.gov'); setPassword('DemoPass@2026'); }}
+                className="text-left px-2 py-1.5 rounded bg-slate-50 hover:bg-blue-50 border border-slate-200 text-slate-700 hover:text-blue-800 transition cursor-pointer"
+              >
+                <div className="font-semibold">Investigator</div>
+                <div className="text-[10px] text-slate-400">investigator@demo.gov</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setEmail('forensic@demo.gov'); setPassword('DemoPass@2026'); }}
+                className="text-left px-2 py-1.5 rounded bg-slate-50 hover:bg-blue-50 border border-slate-200 text-slate-700 hover:text-blue-800 transition cursor-pointer"
+              >
+                <div className="font-semibold">Forensic Officer</div>
+                <div className="text-[10px] text-slate-400">forensic@demo.gov</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setEmail('admin@demo.gov'); setPassword('DemoPass@2026'); }}
+                className="text-left px-2 py-1.5 rounded bg-slate-50 hover:bg-blue-50 border border-slate-200 text-slate-700 hover:text-blue-800 transition cursor-pointer"
+              >
+                <div className="font-semibold">Administrator</div>
+                <div className="text-[10px] text-slate-400">admin@demo.gov</div>
+              </button>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-2 text-center font-mono">
+              Demo Password: <span className="font-semibold text-slate-700">DemoPass@2026</span>
+            </div>
+          </div>
+
           <div className="mt-4 pt-3 border-t border-slate-100 text-center">
             <button
               onClick={() => navigate('/')}
-              className="text-[11px] text-slate-500 hover:text-blue-700 font-medium transition"
+              className="text-[11px] text-slate-500 hover:text-blue-700 font-medium transition cursor-pointer"
             >
               ← Return to Portal
             </button>

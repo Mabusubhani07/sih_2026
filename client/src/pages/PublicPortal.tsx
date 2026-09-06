@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DiempBadge } from '../components/DiempBadge';
+import { DocumentWorkflowSection } from '../components/DocumentWorkflowSection';
 import {
   Lock,
   FileText,
@@ -28,7 +29,7 @@ export const PublicPortal: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F0F4F8] text-slate-900 font-sans flex flex-col selection:bg-blue-100 selection:text-blue-900">
       {/* 1. Header (Exact structure matching reference) */}
-      <header className="sticky top-0 z-40 bg-white border-b border-slate-200">
+      <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-2xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between">
           {/* Left: Star Crest Emblem + Title */}
           <div
@@ -53,15 +54,21 @@ export const PublicPortal: React.FC = () => {
           <nav className="hidden md:flex items-center space-x-8 text-xs font-semibold text-slate-800">
             <button
               onClick={() => scrollToSection('about-section')}
-              className="hover:text-[#1B56CA] transition cursor-pointer"
+              className="hover:text-[#1B56CA] transition-colors duration-150 cursor-pointer"
             >
               About
             </button>
             <button
               onClick={() => scrollToSection('capabilities-section')}
-              className="hover:text-[#1B56CA] transition cursor-pointer"
+              className="hover:text-[#1B56CA] transition-colors duration-150 cursor-pointer"
             >
               Portal Information
+            </button>
+            <button
+              onClick={() => scrollToSection('workflow-section')}
+              className="hover:text-[#1B56CA] transition-colors duration-150 cursor-pointer"
+            >
+              Workflow
             </button>
           </nav>
 
@@ -69,7 +76,7 @@ export const PublicPortal: React.FC = () => {
           <div className="md:hidden">
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 text-slate-700 hover:text-slate-950"
+              className="p-2 text-slate-700 hover:text-slate-950 transition-colors"
               aria-label="Toggle Menu"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -79,28 +86,51 @@ export const PublicPortal: React.FC = () => {
 
         {/* Mobile Dropdown */}
         {mobileMenuOpen && (
-          <div className="md:hidden bg-white border-b border-slate-200 px-5 py-3 space-y-2 text-xs font-semibold">
+          <div className="md:hidden bg-white border-b border-slate-200 px-5 py-3 space-y-2 text-xs font-semibold toast-drop-fade">
             <button
               onClick={() => scrollToSection('about-section')}
-              className="block w-full text-left py-1.5 text-slate-700 hover:text-[#1B56CA]"
+              className="block w-full text-left py-1.5 text-slate-700 hover:text-[#1B56CA] transition-colors"
             >
               About
             </button>
             <button
               onClick={() => scrollToSection('capabilities-section')}
-              className="block w-full text-left py-1.5 text-slate-700 hover:text-[#1B56CA]"
+              className="block w-full text-left py-1.5 text-slate-700 hover:text-[#1B56CA] transition-colors"
             >
               Portal Information
+            </button>
+            <button
+              onClick={() => scrollToSection('workflow-section')}
+              className="block w-full text-left py-1.5 text-slate-700 hover:text-[#1B56CA] transition-colors"
+            >
+              Workflow
             </button>
           </div>
         )}
       </header>
 
-      {/* Main Container */}
-      <main className="flex-1 bg-white">
-        {/* 2. Hero Section */}
-        <section className="bg-gradient-to-b from-[#F8FAFD] to-white border-b border-slate-200/70 py-10 sm:py-14 lg:py-16">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      {/* Main Container with subtle page-entry animation */}
+      <main className="flex-1 bg-white portal-entry-animate">
+        {/* 2. Hero Section with subtle Data Flow Lines */}
+        <section className="relative bg-gradient-to-b from-[#F8FAFD] to-white border-b border-slate-200/70 py-10 sm:py-14 lg:py-16 overflow-hidden">
+          {/* Subtle Data Flow Lines Background (Right -> Left, Linear, Infinite) */}
+          <div className="hero-flow-container" aria-hidden="true">
+            {/* Mobile (3 lines) */}
+            <div className="hero-flow-line" style={{ top: '14%', width: '320px', animationDuration: '22s', animationDelay: '-3s' }} />
+            <div className="hero-flow-line" style={{ top: '44%', width: '240px', animationDuration: '27s', animationDelay: '-10s' }} />
+            <div className="hero-flow-line" style={{ top: '76%', width: '280px', animationDuration: '21s', animationDelay: '-16s' }} />
+
+            {/* Tablet (+2 lines = 5 lines) */}
+            <div className="hero-flow-line hidden sm:block" style={{ top: '26%', width: '260px', animationDuration: '30s', animationDelay: '-6s' }} />
+            <div className="hero-flow-line hidden sm:block" style={{ top: '88%', width: '300px', animationDuration: '24s', animationDelay: '-19s' }} />
+
+            {/* Desktop (+3 lines = 8 lines) */}
+            <div className="hero-flow-line hidden lg:block" style={{ top: '7%', width: '190px', animationDuration: '26s', animationDelay: '-13s' }} />
+            <div className="hero-flow-line hidden lg:block" style={{ top: '58%', width: '340px', animationDuration: '20s', animationDelay: '-8s' }} />
+            <div className="hero-flow-line hidden lg:block" style={{ top: '93%', width: '220px', animationDuration: '29s', animationDelay: '-22s' }} />
+          </div>
+
+          <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
               {/* Left Column: Heading, description, CTA */}
               <div className="lg:col-span-6 space-y-4">
@@ -179,7 +209,7 @@ export const PublicPortal: React.FC = () => {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
               {/* 1. Case Management */}
-              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4">
+              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4 interactive-card">
                 <div className="w-12 h-12 rounded-full bg-[#EBF3FE] text-[#1B56CA] flex items-center justify-center shrink-0 mt-0.5">
                   <FolderGit2 className="w-5 h-5" />
                 </div>
@@ -194,7 +224,7 @@ export const PublicPortal: React.FC = () => {
               </div>
 
               {/* 2. Document Management */}
-              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4">
+              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4 interactive-card">
                 <div className="w-12 h-12 rounded-full bg-[#EBF3FE] text-[#1B56CA] flex items-center justify-center shrink-0 mt-0.5">
                   <FileText className="w-5 h-5" />
                 </div>
@@ -209,7 +239,7 @@ export const PublicPortal: React.FC = () => {
               </div>
 
               {/* 3. Evidence Management */}
-              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4">
+              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4 interactive-card">
                 <div className="w-12 h-12 rounded-full bg-[#EBF3FE] text-[#1B56CA] flex items-center justify-center shrink-0 mt-0.5">
                   <PackageCheck className="w-5 h-5" />
                 </div>
@@ -224,7 +254,7 @@ export const PublicPortal: React.FC = () => {
               </div>
 
               {/* 4. Document Integrity */}
-              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4">
+              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4 interactive-card">
                 <div className="w-12 h-12 rounded-full bg-[#EBF3FE] text-[#1B56CA] flex items-center justify-center shrink-0 mt-0.5">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
@@ -239,7 +269,7 @@ export const PublicPortal: React.FC = () => {
               </div>
 
               {/* 5. Controlled Access */}
-              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4">
+              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4 interactive-card">
                 <div className="w-12 h-12 rounded-full bg-[#EBF3FE] text-[#1B56CA] flex items-center justify-center shrink-0 mt-0.5">
                   <UserCheck className="w-5 h-5" />
                 </div>
@@ -254,7 +284,7 @@ export const PublicPortal: React.FC = () => {
               </div>
 
               {/* 6. Auditability */}
-              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4">
+              <div className="bg-white border border-slate-200/90 rounded-[8px] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-slate-300 transition flex items-start space-x-4 interactive-card">
                 <div className="w-12 h-12 rounded-full bg-[#EBF3FE] text-[#1B56CA] flex items-center justify-center shrink-0 mt-0.5">
                   <ClipboardList className="w-5 h-5" />
                 </div>
@@ -270,6 +300,9 @@ export const PublicPortal: React.FC = () => {
             </div>
           </div>
         </section>
+
+        {/* 10-Step Document Processing Workflow */}
+        <DocumentWorkflowSection />
 
         {/* 5. Secondary Information / Authorized Access */}
         <section className="py-10 sm:py-14 bg-white border-t border-slate-200/70">

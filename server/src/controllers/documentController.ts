@@ -9,7 +9,7 @@ import { DocumentIngestionService } from '../services/documentIngestionService';
 import { FileValidationService } from '../services/fileValidationService';
 import { TextExtractionService } from '../services/textExtractionService';
 import { MetadataExtractionService } from '../services/metadataExtractionService';
-import { AUDIT_ACTIONS, DOCUMENT_STATUS, ROLES } from '../config/constants';
+import { AUDIT_ACTIONS, DOCUMENT_STATUS, DOCUMENT_TYPES, ROLES } from '../config/constants';
 
 export class DocumentController {
   /**
@@ -135,9 +135,13 @@ export class DocumentController {
         validation.normalizedMimeType
       );
 
-      // 4. Text Extraction & OCR
+      // Retrieve actual file bytes from storage abstraction
+      const storedBytes = await storageService.getFileBuffer(stored.storagePath);
+      console.log(`[OCR] Version upload: Storage retrieval successful for ${stored.storagePath} (${storedBytes.length} bytes)`);
+
+      // 4. Text Extraction & Real OCR
       const extraction = await TextExtractionService.extractText(
-        file.buffer,
+        storedBytes,
         file.originalname,
         validation.normalizedMimeType
       );
@@ -669,82 +673,331 @@ export class DocumentController {
   }
 
   /**
-   * Update or correct extracted document metadata
+   * Update or correct extracted document metadata with transactional persistence and audit logging
    */
   static async updateMetadata(req: Request, res: Response) {
     try {
       const { id } = req.params;
       const user = req.user!;
+
+      // Retrieve current document state with metadata and case relationships
+      const existingDoc = await prisma.document.findUnique({
+        where: { id },
+        include: {
+          metadata: true,
+          department: true,
+          case: {
+            select: {
+              id: true,
+              caseNumber: true,
+              firNumber: true,
+            },
+          },
+        },
+      });
+
+      if (!existingDoc) {
+        return res.status(404).json({ error: 'Document not found.', code: 'DOC_NOT_FOUND' });
+      }
+
+      // Check judicial mutation restriction defensively
+      if (user.role === ROLES.COURT_USER) {
+        return res.status(403).json({
+          error: 'ACCESS RESTRICTED: Judicial personnel maintain read-only discovery clearance.',
+          code: 'AUTH_403_COURT_READONLY',
+        });
+      }
+
+      // 1. Backend Validation
       const {
+        title,
+        documentType,
+        subCategory,
+        category,
+        departmentId,
+        departmentName,
+        department,
+        referenceNumber,
         caseNumber,
         firNumber,
-        referenceNumber,
         documentDate,
+        date,
         issuingAuthority,
-        departmentName,
+        authority,
         location,
         language,
         entities,
         keywords,
       } = req.body;
 
-      const doc = await prisma.document.findUnique({ where: { id } });
-      if (!doc) {
-        return res.status(404).json({ error: 'Document not found.' });
+      if (title !== undefined) {
+        if (typeof title !== 'string' || title.trim().length === 0) {
+          return res.status(400).json({ error: 'Document title cannot be empty.' });
+        }
+        if (title.trim().length > 255) {
+          return res.status(400).json({ error: 'Document title cannot exceed 255 characters.' });
+        }
       }
 
-      const metadata = await prisma.documentMetadata.upsert({
-        where: { documentId: id },
-        update: {
-          caseNumber,
-          firNumber,
-          referenceNumber,
-          documentDate: documentDate ? new Date(documentDate) : undefined,
-          issuingAuthority,
-          departmentName,
-          location,
-          language,
-          entities: Array.isArray(entities) ? JSON.stringify(entities) : entities,
-          keywords: Array.isArray(keywords) ? JSON.stringify(keywords) : keywords,
-          isVerified: true,
-          verifiedById: user.id,
-          verifiedAt: new Date(),
-        },
-        create: {
-          documentId: id,
-          caseNumber,
-          firNumber,
-          referenceNumber,
-          documentDate: documentDate ? new Date(documentDate) : undefined,
-          issuingAuthority,
-          departmentName,
-          location,
-          language: language || 'en',
-          entities: Array.isArray(entities) ? JSON.stringify(entities) : entities,
-          keywords: Array.isArray(keywords) ? JSON.stringify(keywords) : keywords,
-          isVerified: true,
-          verifiedById: user.id,
-          verifiedAt: new Date(),
-        },
+      if (documentType !== undefined) {
+        const allowedTypes = Object.values(DOCUMENT_TYPES);
+        if (!allowedTypes.includes(documentType)) {
+          return res.status(400).json({
+            error: `Invalid document classification type. Allowed values: ${allowedTypes.join(', ')}`,
+          });
+        }
+      }
+
+      const rawDate = documentDate !== undefined ? documentDate : date;
+      if (rawDate !== undefined && rawDate !== null && String(rawDate).trim() !== '') {
+        const parsedDate = new Date(rawDate);
+        if (isNaN(parsedDate.getTime())) {
+          return res.status(400).json({ error: 'Invalid document date value.' });
+        }
+      }
+
+      if (language !== undefined && language !== null && String(language).trim().length > 50) {
+        return res.status(400).json({ error: 'Language string exceeds permitted length.' });
+      }
+
+      // 2. Prepare Document Model Updates
+      const docUpdate: any = {};
+      if (title !== undefined) {
+        docUpdate.title = title.trim();
+      }
+      if (documentType !== undefined) {
+        docUpdate.documentType = documentType;
+      }
+
+      const effectiveCategory = subCategory !== undefined ? subCategory : category;
+      if (effectiveCategory !== undefined) {
+        docUpdate.subCategory = effectiveCategory && String(effectiveCategory).trim()
+          ? String(effectiveCategory).trim()
+          : null;
+      }
+
+      const effectiveDeptName = departmentName !== undefined ? departmentName : department;
+      if (departmentId !== undefined) {
+        if (departmentId) {
+          const dept = await prisma.department.findUnique({ where: { id: departmentId } });
+          if (dept) docUpdate.departmentId = dept.id;
+        }
+      } else if (effectiveDeptName !== undefined && effectiveDeptName && String(effectiveDeptName).trim()) {
+        const trimmedDept = String(effectiveDeptName).trim();
+        const matchedDept = await prisma.department.findFirst({
+          where: {
+            OR: [
+              { name: { equals: trimmedDept, mode: 'insensitive' } },
+              { code: { equals: trimmedDept, mode: 'insensitive' } },
+            ],
+          },
+        });
+        if (matchedDept) {
+          docUpdate.departmentId = matchedDept.id;
+        }
+      }
+
+      // 3. Prepare DocumentMetadata Model Updates (handling null/cleared values)
+      const metadataUpdate: any = {
+        isVerified: true,
+        verifiedById: user.id,
+        verifiedAt: new Date(),
+      };
+
+      if (referenceNumber !== undefined) {
+        metadataUpdate.referenceNumber = referenceNumber && String(referenceNumber).trim()
+          ? String(referenceNumber).trim()
+          : null;
+      }
+      if (caseNumber !== undefined) {
+        metadataUpdate.caseNumber = caseNumber && String(caseNumber).trim()
+          ? String(caseNumber).trim()
+          : null;
+      }
+      if (firNumber !== undefined) {
+        metadataUpdate.firNumber = firNumber && String(firNumber).trim()
+          ? String(firNumber).trim()
+          : null;
+      }
+      if (rawDate !== undefined) {
+        metadataUpdate.documentDate = rawDate && String(rawDate).trim() ? new Date(rawDate) : null;
+      }
+
+      const effectiveAuthority = issuingAuthority !== undefined ? issuingAuthority : authority;
+      if (effectiveAuthority !== undefined) {
+        metadataUpdate.issuingAuthority = effectiveAuthority && String(effectiveAuthority).trim()
+          ? String(effectiveAuthority).trim()
+          : null;
+      }
+
+      if (effectiveDeptName !== undefined) {
+        metadataUpdate.departmentName = effectiveDeptName && String(effectiveDeptName).trim()
+          ? String(effectiveDeptName).trim()
+          : null;
+      }
+
+      if (location !== undefined) {
+        metadataUpdate.location = location && String(location).trim()
+          ? String(location).trim()
+          : null;
+      }
+
+      if (language !== undefined) {
+        metadataUpdate.language = language && String(language).trim()
+          ? String(language).trim()
+          : 'en';
+      }
+
+      if (entities !== undefined) {
+        metadataUpdate.entities = Array.isArray(entities)
+          ? JSON.stringify(entities)
+          : (entities && String(entities).trim() ? String(entities).trim() : null);
+      }
+
+      if (keywords !== undefined) {
+        metadataUpdate.keywords = Array.isArray(keywords)
+          ? JSON.stringify(keywords)
+          : (keywords && String(keywords).trim() ? String(keywords).trim() : null);
+      }
+
+      // 4. Compute Changed Fields for Audit Log
+      const changedFields: string[] = [];
+      if (docUpdate.title !== undefined && docUpdate.title !== existingDoc.title) {
+        changedFields.push('title');
+      }
+      if (docUpdate.documentType !== undefined && docUpdate.documentType !== existingDoc.documentType) {
+        changedFields.push('documentType');
+      }
+      if (docUpdate.subCategory !== undefined && docUpdate.subCategory !== (existingDoc.subCategory ?? null)) {
+        changedFields.push('category');
+      }
+      if (docUpdate.departmentId !== undefined && docUpdate.departmentId !== existingDoc.departmentId) {
+        changedFields.push('department');
+      }
+
+      const prevMeta = existingDoc.metadata;
+      if (metadataUpdate.referenceNumber !== undefined && metadataUpdate.referenceNumber !== (prevMeta?.referenceNumber ?? null)) {
+        changedFields.push('referenceNumber');
+      }
+      if (metadataUpdate.documentDate !== undefined) {
+        const prevD = prevMeta?.documentDate ? new Date(prevMeta.documentDate).toISOString().slice(0, 10) : null;
+        const newD = metadataUpdate.documentDate ? new Date(metadataUpdate.documentDate).toISOString().slice(0, 10) : null;
+        if (prevD !== newD) changedFields.push('documentDate');
+      }
+      if (metadataUpdate.issuingAuthority !== undefined && metadataUpdate.issuingAuthority !== (prevMeta?.issuingAuthority ?? null)) {
+        changedFields.push('issuingAuthority');
+      }
+      if (metadataUpdate.departmentName !== undefined && metadataUpdate.departmentName !== (prevMeta?.departmentName ?? null)) {
+        changedFields.push('departmentName');
+      }
+      if (metadataUpdate.location !== undefined && metadataUpdate.location !== (prevMeta?.location ?? null)) {
+        changedFields.push('location');
+      }
+      if (metadataUpdate.language !== undefined && metadataUpdate.language !== (prevMeta?.language ?? 'en')) {
+        changedFields.push('language');
+      }
+      if (metadataUpdate.entities !== undefined && metadataUpdate.entities !== (prevMeta?.entities ?? null)) {
+        changedFields.push('entities');
+      }
+      if (metadataUpdate.keywords !== undefined && metadataUpdate.keywords !== (prevMeta?.keywords ?? null)) {
+        changedFields.push('keywords');
+      }
+
+      // 5. Execute Transactional Database Update
+      await prisma.$transaction(async (tx) => {
+        if (Object.keys(docUpdate).length > 0) {
+          await tx.document.update({
+            where: { id },
+            data: docUpdate,
+          });
+        }
+
+        await tx.documentMetadata.upsert({
+          where: { documentId: id },
+          update: metadataUpdate,
+          create: {
+            documentId: id,
+            caseNumber: metadataUpdate.caseNumber ?? existingDoc.case?.caseNumber ?? null,
+            firNumber: metadataUpdate.firNumber ?? existingDoc.case?.firNumber ?? null,
+            referenceNumber: metadataUpdate.referenceNumber ?? existingDoc.documentNumber,
+            documentDate: metadataUpdate.documentDate ?? existingDoc.createdAt,
+            issuingAuthority: metadataUpdate.issuingAuthority ?? null,
+            departmentName: metadataUpdate.departmentName ?? null,
+            location: metadataUpdate.location ?? null,
+            language: metadataUpdate.language ?? 'en',
+            entities: metadataUpdate.entities ?? null,
+            keywords: metadataUpdate.keywords ?? null,
+            isVerified: true,
+            verifiedById: user.id,
+            verifiedAt: new Date(),
+          },
+        });
       });
 
+      // 6. Record Real Append-Only Audit Event
       await AuditService.log({
         userId: user.id,
         userRole: user.role,
-        action: 'METADATA_UPDATED',
-        caseId: doc.caseId,
-        documentId: doc.id,
+        action: AUDIT_ACTIONS.METADATA_UPDATED,
+        caseId: existingDoc.caseId,
+        documentId: existingDoc.id,
         status: 'SUCCESS',
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
         details: {
-          referenceNumber,
-          issuingAuthority,
+          documentNumber: existingDoc.documentNumber,
+          changedFields: changedFields.length > 0 ? changedFields : ['metadata'],
           verifiedBy: user.name,
         },
       });
 
-      return res.json(metadata);
+      // 7. Retrieve Fresh Persisted Document from Database
+      const freshDoc = await prisma.document.findUnique({
+        where: { id },
+        include: {
+          case: {
+            select: {
+              id: true,
+              caseNumber: true,
+              firNumber: true,
+              title: true,
+              status: true,
+              assignedDepartmentId: true,
+              leadInvestigatorId: true,
+            },
+          },
+          department: true,
+          metadata: true,
+          createdBy: {
+            select: { id: true, name: true, badgeNumber: true, role: true, department: true },
+          },
+          versions: {
+            include: {
+              uploadedBy: { select: { id: true, name: true, badgeNumber: true, role: true } },
+            },
+            orderBy: { versionNumber: 'desc' },
+          },
+          shares: {
+            include: {
+              sharedWithUser: { select: { id: true, name: true, badgeNumber: true, role: true } },
+              sharedByUser: { select: { id: true, name: true, badgeNumber: true } },
+            },
+          },
+          evidence: true,
+        },
+      });
+
+      if (!freshDoc) {
+        return res.status(404).json({ error: 'Failed to retrieve updated document record.' });
+      }
+
+      // Return both document structure and metadata keys for seamless frontend consumption
+      return res.json({
+        ...freshDoc,
+        ...freshDoc.metadata,
+        document: freshDoc,
+        metadata: freshDoc.metadata,
+      });
     } catch (err: any) {
       console.error('updateMetadata error:', err);
       return res.status(500).json({ error: 'Failed to update document metadata.' });
@@ -773,6 +1026,8 @@ export class DocumentController {
   static async getOcrText(req: Request, res: Response) {
     try {
       const { id } = req.params;
+      const { version } = req.query;
+
       const doc = await prisma.document.findUnique({
         where: { id },
         select: {
@@ -782,6 +1037,16 @@ export class DocumentController {
           ocrText: true,
           isOcrProcessed: true,
           processingStatus: true,
+          processingError: true,
+          currentVersionNumber: true,
+          versions: {
+            select: {
+              versionNumber: true,
+              extractedText: true,
+              originalFileName: true,
+            },
+            orderBy: { versionNumber: 'desc' },
+          },
         },
       });
 
@@ -789,7 +1054,19 @@ export class DocumentController {
         return res.status(404).json({ error: 'Document not found.' });
       }
 
-      return res.json(doc);
+      const targetVer = version ? parseInt(String(version), 10) : doc.currentVersionNumber;
+      const verRecord = doc.versions.find((v) => v.versionNumber === targetVer);
+
+      return res.json({
+        id: doc.id,
+        documentNumber: doc.documentNumber,
+        title: doc.title,
+        versionNumber: targetVer,
+        ocrText: verRecord?.extractedText || doc.ocrText,
+        isOcrProcessed: doc.isOcrProcessed,
+        processingStatus: doc.processingStatus,
+        processingError: doc.processingError,
+      });
     } catch (err: any) {
       return res.status(500).json({ error: 'Failed to retrieve OCR text.' });
     }

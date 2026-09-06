@@ -226,6 +226,8 @@ export class CaseController {
                 orderBy: { versionNumber: 'desc' },
                 take: 1,
               },
+              metadata: true,
+              department: true,
               shares: {
                 where: { revokedAt: null },
                 include: {

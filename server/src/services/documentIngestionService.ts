@@ -114,17 +114,32 @@ export class DocumentIngestionService {
 
     // Step 7: Execute Sequential Processing Stages
     try {
-      // 7a. Text Extraction / Local OCR
+      console.log(`[OCR] Document ID: ${doc.id}`);
+      console.log(`[OCR] Version ID: 1`);
+      console.log(`[OCR] MIME type: ${validation.normalizedMimeType}`);
+      console.log(`[OCR] File size: ${stored.fileSize} bytes`);
+
+      // Retrieve actual file bytes from storage abstraction
+      const storedBytes = await storageService.getFileBuffer(stored.storagePath);
+      console.log(`[OCR] Storage retrieval successful: ${stored.storagePath} (${storedBytes.length} bytes)`);
+
+      // 7a. Text Extraction / Real OCR
       await prisma.document.update({
         where: { id: doc.id },
         data: { processingStatus: 'PROCESSING' },
       });
 
+      console.log(`[OCR] OCR / Extraction started for ${doc.documentNumber}`);
       const extraction = await TextExtractionService.extractText(
-        file.buffer,
+        storedBytes,
         file.originalname,
         validation.normalizedMimeType
       );
+
+      console.log(`[OCR] Extraction method: ${extraction.method}`);
+      console.log(`[OCR] Page count: ${extraction.pageCount}`);
+      console.log(`[OCR] OCR completed`);
+      console.log(`[OCR] Extracted character count: ${extraction.text.length}`);
 
       await prisma.document.update({
         where: { id: doc.id },
@@ -146,6 +161,7 @@ export class DocumentIngestionService {
           extractedText: extraction.text,
         },
       });
+      console.log(`[OCR] Database save successful`);
 
       // 7b. Classification
       const classification = ClassificationService.classify(file.originalname, extraction.text);
@@ -215,6 +231,7 @@ export class DocumentIngestionService {
           department: true,
         },
       });
+      console.log(`[OCR] Search indexing successful: Document ${doc.documentNumber} is READY`);
 
       // Step 8: Append-Only Immutable Audit Log
       await AuditService.log({
@@ -234,12 +251,13 @@ export class DocumentIngestionService {
           subCategory: finalizedDoc.subCategory,
           processingStatus: 'READY',
           isOcr: extraction.isOcr,
+          extractionMethod: extraction.method,
         },
       });
 
       return finalizedDoc;
     } catch (procErr: any) {
-      console.error('Document pipeline non-fatal processing error:', procErr);
+      console.error('[OCR] Document pipeline processing failed:', procErr);
 
       // Preserve original file, record failure state
       const failedDoc = await prisma.document.update({
@@ -296,14 +314,8 @@ export class DocumentIngestionService {
     if (!doc.versions || doc.versions.length === 0) throw new Error('No file version recorded.');
 
     const activeVersion = doc.versions[0];
-    const uploadsDir = path.resolve(__dirname, '../../uploads');
-    const filePath = path.join(uploadsDir, activeVersion.fileName);
-
-    if (!fs.existsSync(filePath)) {
-      throw new Error('Original file artifact is missing from secure storage.');
-    }
-
-    const buffer = fs.readFileSync(filePath);
+    const buffer = await storageService.getFileBuffer(activeVersion.storagePath);
+    console.log(`[OCR] Retry: Storage retrieval successful for ${activeVersion.storagePath} (${buffer.length} bytes)`);
 
     // Update status to PROCESSING
     await prisma.document.update({

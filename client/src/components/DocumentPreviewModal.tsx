@@ -44,6 +44,12 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
   const [copiedHash, setCopiedHash] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'preview' | 'ocr'>('preview');
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
+  const [metadataSuccess, setMetadataSuccess] = useState<boolean>(false);
+
+  // Sync doc state when parent component updates initialDoc
+  useEffect(() => {
+    setDoc(initialDoc);
+  }, [initialDoc]);
 
   // Modals
   const [showUploadVersion, setShowUploadVersion] = useState(false);
@@ -255,20 +261,40 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                     <span className="font-semibold text-slate-800 text-xs">
                       Digitized Bitstream Text Stream (Version {selectedVersionNum})
                     </span>
-                    <button
-                      onClick={() => {
-                        const text = activeVersion?.extractedText || doc.ocrText || '';
-                        navigator.clipboard.writeText(text);
-                        alert('Extracted transcript copied to clipboard.');
-                      }}
-                      className="text-blue-700 hover:underline text-[11px] font-medium"
-                    >
-                      Copy Transcript
-                    </button>
+                    {(activeVersion?.extractedText || doc.ocrText) && (
+                      <button
+                        onClick={() => {
+                          const text = activeVersion?.extractedText || doc.ocrText || '';
+                          navigator.clipboard.writeText(text);
+                          alert('Extracted transcript copied to clipboard.');
+                        }}
+                        className="text-blue-700 hover:underline text-[11px] font-medium"
+                      >
+                        Copy Transcript
+                      </button>
+                    )}
                   </div>
-                  <div className="font-mono text-xs text-slate-800 whitespace-pre-wrap leading-relaxed select-text bg-slate-50 p-4 rounded border border-slate-200">
-                    {activeVersion?.extractedText || doc.ocrText || 'No extracted or OCR text recorded for this document version.'}
-                  </div>
+                  {doc.processingStatus === 'PROCESSING' || doc.processingStatus === 'UPLOADED' ? (
+                    <div className="p-8 text-center bg-amber-50/60 border border-amber-200 rounded text-amber-900 space-y-2">
+                      <div className="inline-block animate-spin w-5 h-5 border-2 border-amber-600 border-t-transparent rounded-full mb-1"></div>
+                      <div className="font-semibold text-xs">Text extraction in progress.</div>
+                      <div className="text-[11px] text-amber-700">The document is currently undergoing native stream parsing or optical character recognition.</div>
+                    </div>
+                  ) : doc.processingStatus === 'PROCESSING_FAILED' ? (
+                    <div className="p-6 bg-rose-50 border border-rose-200 rounded text-rose-900 space-y-2">
+                      <div className="font-semibold text-xs flex items-center space-x-1.5 text-rose-700">
+                        <span>⚠</span>
+                        <span>Text extraction failed.</span>
+                      </div>
+                      <div className="text-[11px] text-rose-800 font-mono bg-white/70 p-2.5 rounded border border-rose-200/60">
+                        {doc.processingError || 'Unable to extract text from this document.'}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="font-mono text-xs text-slate-800 whitespace-pre-wrap leading-relaxed select-text bg-slate-50 p-4 rounded border border-slate-200">
+                      {activeVersion?.extractedText || doc.ocrText || 'No extracted or OCR text recorded for this document version.'}
+                    </div>
+                  )}
                 </div>
               ) : isLoadingContent ? (
                 <div className="p-12 text-center text-slate-500 font-sans">
@@ -383,6 +409,13 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                   )}
                 </div>
 
+                {metadataSuccess && (
+                  <div className="p-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded flex items-center space-x-1.5 text-[11px] font-medium toast-drop-fade">
+                    <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Metadata updated and persisted to database.</span>
+                  </div>
+                )}
+
                 <div className="bg-slate-50 border border-slate-200 rounded p-2.5 space-y-1.5 text-[11px]">
                   {doc.metadata?.referenceNumber && (
                     <div className="flex justify-between">
@@ -396,6 +429,14 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                       <span className="text-slate-800 text-right truncate max-w-[150px]">{doc.metadata.issuingAuthority}</span>
                     </div>
                   )}
+                  {(doc.metadata?.departmentName || doc.department?.name) && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Department:</span>
+                      <span className="text-slate-800 text-right truncate max-w-[150px]">
+                        {doc.metadata?.departmentName || doc.department?.name}
+                      </span>
+                    </div>
+                  )}
                   {doc.metadata?.location && (
                     <div className="flex justify-between">
                       <span className="text-slate-500">Location:</span>
@@ -406,6 +447,12 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                     <div className="flex justify-between">
                       <span className="text-slate-500">Record Date:</span>
                       <span className="font-mono text-slate-800">{new Date(doc.metadata.documentDate).toLocaleDateString()}</span>
+                    </div>
+                  )}
+                  {doc.metadata?.language && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Language:</span>
+                      <span className="text-slate-800 uppercase font-mono">{doc.metadata.language}</span>
                     </div>
                   )}
                   {doc.metadata?.entities && (
@@ -584,7 +631,14 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
           document={doc}
           metadata={doc.metadata}
           onClose={() => setShowMetadataModal(false)}
-          onUpdated={() => reloadDoc()}
+          onUpdated={async (updated) => {
+            if (updated) {
+              setDoc(updated);
+            }
+            setMetadataSuccess(true);
+            setTimeout(() => setMetadataSuccess(false), 3500);
+            await reloadDoc();
+          }}
         />
       )}
     </div>

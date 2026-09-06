@@ -85,7 +85,7 @@ export const Header: React.FC = () => {
             </button>
 
             {showRoleDropdown && (
-              <div className="absolute right-0 mt-1.5 w-72 bg-white border border-slate-200 rounded-md shadow-lg py-1.5 z-50 text-xs">
+              <div className="absolute right-0 mt-1.5 w-72 bg-white border border-slate-200 rounded-md shadow-lg py-1.5 z-50 text-xs toast-drop-fade">
                 <div className="px-3 py-1.5 border-b border-slate-100 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                   Select Officer Profile
                 </div>
@@ -130,7 +130,7 @@ export const Header: React.FC = () => {
             </button>
 
             {showNotifications && (
-              <div className="absolute right-0 mt-1.5 w-80 bg-white border border-slate-200 rounded-md shadow-lg py-2 z-50">
+              <div className="absolute right-0 mt-1.5 w-80 bg-white border border-slate-200 rounded-md shadow-lg py-2 z-50 toast-drop-fade">
                 <div className="px-3 py-1.5 border-b border-slate-100 font-semibold text-xs text-slate-800 flex justify-between items-center">
                   <span>Notifications</span>
                   <span className="text-[11px] text-slate-500 font-normal">{unreadCount} unread</span>
@@ -177,7 +177,7 @@ export const Header: React.FC = () => {
             </button>
 
             {showProfileDropdown && (
-              <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-md shadow-lg py-1 z-50 text-xs">
+              <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-md shadow-lg py-1 z-50 text-xs toast-drop-fade">
                 <div className="px-3 py-2 border-b border-slate-100">
                   <div className="font-semibold text-slate-900">{user?.name}</div>
                   <div className="text-[11px] text-slate-500">{user?.email}</div>

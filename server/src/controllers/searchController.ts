@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../prisma';
-import { ROLES } from '../config/constants';
+import { ROLES, DOCUMENT_TYPES } from '../config/constants';
 
 export class SearchController {
   static async search(req: Request, res: Response) {
@@ -62,35 +62,48 @@ export class SearchController {
       if (queryStr) {
         const keywords = queryStr.toLowerCase().split(/\s+/).filter((k) => k.length > 2);
 
-        // Detect if user query implies a document type (e.g. "forensic", "fir", "statement")
+        // Detect if user query implies a document type
         const typeBoosts: string[] = [];
-        if (queryStr.toLowerCase().includes('forensic')) typeBoosts.push('FORENSIC_REPORT');
-        if (queryStr.toLowerCase().includes('fir')) typeBoosts.push('FIR');
-        if (queryStr.toLowerCase().includes('witness') || queryStr.toLowerCase().includes('statement')) {
-          typeBoosts.push('WITNESS_STATEMENT');
+        const lowerQ = queryStr.toLowerCase();
+        Object.values(DOCUMENT_TYPES).forEach((dt) => {
+          const readable = dt.toLowerCase().replace(/_/g, ' ');
+          if (lowerQ.includes(readable) || lowerQ.includes(dt.toLowerCase())) {
+            typeBoosts.push(dt);
+          }
+        });
+        if (lowerQ.includes('police')) typeBoosts.push(DOCUMENT_TYPES.POLICE_REPORT);
+        if (lowerQ.includes('forensic')) typeBoosts.push(DOCUMENT_TYPES.FORENSIC_REPORT);
+        if (lowerQ.includes('fir')) typeBoosts.push(DOCUMENT_TYPES.FIR);
+        if (lowerQ.includes('witness') || lowerQ.includes('statement')) {
+          typeBoosts.push(DOCUMENT_TYPES.WITNESS_STATEMENT);
         }
-        if (queryStr.toLowerCase().includes('police')) typeBoosts.push('POLICE_REPORT');
-        if (queryStr.toLowerCase().includes('legal')) typeBoosts.push('LEGAL_DOCUMENT');
-        if (queryStr.toLowerCase().includes('evidence')) typeBoosts.push('EVIDENCE');
+        if (lowerQ.includes('legal')) typeBoosts.push(DOCUMENT_TYPES.LEGAL_DOCUMENT);
+        if (lowerQ.includes('evidence')) typeBoosts.push(DOCUMENT_TYPES.EVIDENCE);
+        if (lowerQ.includes('court')) typeBoosts.push(DOCUMENT_TYPES.COURT_DOCUMENT);
+        if (lowerQ.includes('investigation')) typeBoosts.push(DOCUMENT_TYPES.INVESTIGATION_REPORT);
 
         const searchConditions: any[] = [
-          { title: { contains: queryStr } },
-          { documentNumber: { contains: queryStr } },
-          { subCategory: { contains: queryStr } },
-          { ocrText: { contains: queryStr } },
-          { classificationReason: { contains: queryStr } },
-          { case: { title: { contains: queryStr } } },
-          { case: { caseNumber: { contains: queryStr } } },
-          { case: { firNumber: { contains: queryStr } } },
+          { title: { contains: queryStr, mode: 'insensitive' } },
+          { documentNumber: { contains: queryStr, mode: 'insensitive' } },
+          { subCategory: { contains: queryStr, mode: 'insensitive' } },
+          { ocrText: { contains: queryStr, mode: 'insensitive' } },
+          { classificationReason: { contains: queryStr, mode: 'insensitive' } },
+          { case: { title: { contains: queryStr, mode: 'insensitive' } } },
+          { case: { caseNumber: { contains: queryStr, mode: 'insensitive' } } },
+          { case: { firNumber: { contains: queryStr, mode: 'insensitive' } } },
           {
             metadata: {
               is: {
                 OR: [
-                  { keywords: { contains: queryStr } },
-                  { entities: { contains: queryStr } },
-                  { referenceNumber: { contains: queryStr } },
-                  { issuingAuthority: { contains: queryStr } },
-                  { location: { contains: queryStr } },
+                  { keywords: { contains: queryStr, mode: 'insensitive' } },
+                  { entities: { contains: queryStr, mode: 'insensitive' } },
+                  { referenceNumber: { contains: queryStr, mode: 'insensitive' } },
+                  { issuingAuthority: { contains: queryStr, mode: 'insensitive' } },
+                  { location: { contains: queryStr, mode: 'insensitive' } },
+                  { departmentName: { contains: queryStr, mode: 'insensitive' } },
+                  { language: { contains: queryStr, mode: 'insensitive' } },
+                  { caseNumber: { contains: queryStr, mode: 'insensitive' } },
+                  { firNumber: { contains: queryStr, mode: 'insensitive' } },
                 ],
               },
             },
@@ -99,9 +112,9 @@ export class SearchController {
             evidence: {
               some: {
                 OR: [
-                  { title: { contains: queryStr } },
-                  { description: { contains: queryStr } },
-                  { category: { contains: queryStr } },
+                  { title: { contains: queryStr, mode: 'insensitive' } },
+                  { description: { contains: queryStr, mode: 'insensitive' } },
+                  { category: { contains: queryStr, mode: 'insensitive' } },
                 ],
               },
             },
@@ -110,10 +123,10 @@ export class SearchController {
             versions: {
               some: {
                 OR: [
-                  { originalFileName: { contains: queryStr } },
-                  { changeSummary: { contains: queryStr } },
-                  { extractedText: { contains: queryStr } },
-                  { sha256Hash: { contains: queryStr } },
+                  { originalFileName: { contains: queryStr, mode: 'insensitive' } },
+                  { changeSummary: { contains: queryStr, mode: 'insensitive' } },
+                  { extractedText: { contains: queryStr, mode: 'insensitive' } },
+                  { sha256Hash: { contains: queryStr, mode: 'insensitive' } },
                 ],
               },
             },

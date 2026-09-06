@@ -25,10 +25,14 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className = ''
     // Under Investigation / In Progress / Processing
     case 'UNDER_INVESTIGATION':
     case 'REGISTERED':
+      bg = 'bg-blue-50 text-blue-800 border-blue-200';
+      dot = 'bg-blue-600';
+      break;
+
     case 'PROCESSING':
     case 'UPLOADED':
       bg = 'bg-blue-50 text-blue-800 border-blue-200';
-      dot = 'bg-blue-600';
+      dot = 'bg-blue-600 animate-status-dot-pulse';
       break;
 
     // Processing intermediate stages
@@ -37,7 +41,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className = ''
     case 'METADATA_EXTRACTED':
     case 'INDEXED':
       bg = 'bg-cyan-50 text-cyan-800 border-cyan-200';
-      dot = 'bg-cyan-600';
+      dot = 'bg-cyan-600 animate-status-dot-pulse';
       break;
 
     // Forensic Examination / Lab
