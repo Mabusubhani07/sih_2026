@@ -1,7 +1,9 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-dotenv.config({ path: path.resolve(__dirname, '../.env'), override: true });
+if (process.env.VERCEL !== '1') {
+  dotenv.config({ path: path.resolve(__dirname, '../.env') });
+}
 
 import { PrismaClient } from '@prisma/client';
 
