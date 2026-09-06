@@ -92,8 +92,12 @@ export class AuthController {
         },
       });
     } catch (err: any) {
-      console.error('Login error:', err);
-      return res.status(500).json({ error: 'Internal security authentication failure.' });
+      console.error('[Login Failure]', err);
+      const isDev = process.env.NODE_ENV !== 'production' || process.env.VERCEL === '1';
+      return res.status(500).json({
+        error: isDev && err?.message ? `Authentication error: ${err.message}` : 'Internal security authentication failure.',
+        details: isDev ? err?.stack : undefined,
+      });
     }
   }
 
