@@ -44,8 +44,21 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `Request failed with status ${response.status}`);
+    let errorMessage = `Request failed with status ${response.status}`;
+    try {
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        errorMessage = json.error || json.message || json.details || (text.length < 300 ? text : errorMessage);
+      } catch {
+        if (text && text.trim().length > 0 && text.length < 300) {
+          errorMessage = text.trim();
+        }
+      }
+    } catch {
+      // Fallback to default
+    }
+    throw new Error(errorMessage);
   }
 
   // Handle blob responses or json

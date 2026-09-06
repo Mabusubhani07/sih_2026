@@ -52,7 +52,17 @@ app.get(['/api/health', '/health'], async (_req: Request, res: Response) => {
   });
 });
 
-// Mount official API routes (both /api and root to guarantee serverless rewrite compatibility)
+// URL normalization middleware for Vercel serverless rewrites
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  if (req.url.startsWith('/api/index.ts')) {
+    req.url = req.url.replace('/api/index.ts', '') || '/';
+  } else if (req.url.startsWith('/api/index')) {
+    req.url = req.url.replace('/api/index', '') || '/';
+  }
+  next();
+});
+
+// Mount official API routes across all possible rewrite prefixes
 const mountOfficialRoutes = (prefix: string) => {
   app.use(`${prefix}/auth`, authRoutes);
   app.use(`${prefix}/cases`, caseRoutes);
@@ -66,6 +76,8 @@ const mountOfficialRoutes = (prefix: string) => {
   app.use(`${prefix}/notifications`, notificationRoutes);
 };
 
+mountOfficialRoutes('/api/index.ts');
+mountOfficialRoutes('/api/index');
 mountOfficialRoutes('/api');
 mountOfficialRoutes('');
 

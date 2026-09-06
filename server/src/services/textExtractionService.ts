@@ -1,5 +1,3 @@
-import { PDFParse } from 'pdf-parse';
-import mammoth from 'mammoth';
 import { OCRService } from './ocrService';
 
 export interface ExtractionResult {
@@ -124,6 +122,7 @@ export class TextExtractionService {
     fileName: string,
     options?: ExtractionOptions
   ): Promise<ExtractionResult> {
+    const { PDFParse } = await import('pdf-parse');
     const parser = new PDFParse({ data: buffer });
     try {
       // Step 1: Attempt native text extraction
@@ -231,6 +230,8 @@ export class TextExtractionService {
    */
   private static async extractFromDocx(buffer: Buffer, fileName: string): Promise<ExtractionResult> {
     try {
+      const mammothModule: any = await import('mammoth');
+      const mammoth = mammothModule.default || mammothModule;
       const result = await mammoth.extractRawText({ buffer });
       const text = (result.value || '').trim();
 

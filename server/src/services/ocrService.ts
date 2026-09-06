@@ -1,9 +1,3 @@
-import { createWorker } from 'tesseract.js';
-import {
-  TextractClient,
-  DetectDocumentTextCommand,
-} from '@aws-sdk/client-textract';
-
 export interface OCRResult {
   text: string;
   confidence: number;
@@ -27,6 +21,7 @@ export class LocalOCRProvider implements IOCRProvider {
     const lang = language.trim() || 'eng';
     console.log(`[OCR] Local OCR starting with engine: Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes)`);
 
+    const { createWorker } = await import('tesseract.js');
     const cachePath = process.env.VERCEL === '1' ? '/tmp' : undefined;
     const worker = await createWorker(lang, 1, { cachePath });
     try {
@@ -53,19 +48,23 @@ export class LocalOCRProvider implements IOCRProvider {
  * Amazon Textract Provider for AWS Cloud Deployments
  */
 export class AmazonTextractProvider implements IOCRProvider {
-  private client: TextractClient;
+  private client?: any;
 
-  constructor() {
-    this.client = new TextractClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials:
-        process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
-          ? {
-              accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-              secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-            }
-          : undefined,
-    });
+  private async getClient() {
+    if (!this.client) {
+      const { TextractClient } = await import('@aws-sdk/client-textract');
+      this.client = new TextractClient({
+        region: process.env.AWS_REGION || 'us-east-1',
+        credentials:
+          process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+            ? {
+                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+              }
+            : undefined,
+      });
+    }
+    return this.client;
   }
 
   async recognize(
@@ -74,20 +73,22 @@ export class AmazonTextractProvider implements IOCRProvider {
   ): Promise<{ text: string; confidence: number; language: string }> {
     console.log(`[OCR] Amazon Textract OCR starting (bufferSize: ${imageBuffer.length} bytes)`);
 
+    const { DetectDocumentTextCommand } = await import('@aws-sdk/client-textract');
+    const client = await this.getClient();
     const command = new DetectDocumentTextCommand({
       Document: {
         Bytes: imageBuffer,
       },
     });
 
-    const response = await this.client.send(command);
+    const response = await client.send(command);
     const blocks = response.Blocks || [];
 
     // Filter to line blocks and accumulate text in document order
-    const lineBlocks = blocks.filter((b) => b.BlockType === 'LINE');
-    const lines = lineBlocks.map((b) => b.Text || '').filter((t) => t.length > 0);
+    const lineBlocks = blocks.filter((b: any) => b.BlockType === 'LINE');
+    const lines = lineBlocks.map((b: any) => b.Text || '').filter((t: any) => t.length > 0);
 
-    const totalConfidence = lineBlocks.reduce((acc, b) => acc + (b.Confidence || 0), 0);
+    const totalConfidence = lineBlocks.reduce((acc: number, b: any) => acc + (b.Confidence || 0), 0);
     const avgConfidence = lineBlocks.length > 0 ? totalConfidence / lineBlocks.length : 0;
     const text = lines.join('\n');
 
