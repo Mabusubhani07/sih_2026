@@ -27,7 +27,8 @@ export class LocalOCRProvider implements IOCRProvider {
     const lang = language.trim() || 'eng';
     console.log(`[OCR] Local OCR starting with engine: Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes)`);
 
-    const worker = await createWorker(lang);
+    const cachePath = process.env.VERCEL === '1' ? '/tmp' : undefined;
+    const worker = await createWorker(lang, 1, { cachePath });
     try {
       const result = await worker.recognize(imageBuffer);
       const rawText = result.data.text || '';

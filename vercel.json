@@ -17,6 +17,10 @@
     {
       "source": "/uploads/(.*)",
       "destination": "/api"
+    },
+    {
+      "source": "/((?!api|uploads).*)",
+      "destination": "/index.html"
     }
   ]
 }
