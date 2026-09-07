@@ -161,7 +161,7 @@ export class SearchController {
           createdBy: { select: { id: true, name: true, badgeNumber: true, role: true } },
           versions: {
             orderBy: { versionNumber: 'desc' },
-            take: 1,
+            take: 20,
           },
         },
         orderBy: { updatedAt: 'desc' },

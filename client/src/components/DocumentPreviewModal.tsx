@@ -54,10 +54,35 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
   const [isVerifyingIntegrity, setIsVerifyingIntegrity] = useState<boolean>(false);
   const [verificationDetails, setVerificationDetails] = useState<any>(null);
 
-  // Sync doc state when parent component updates initialDoc
+  const [isReprocessingOcr, setIsReprocessingOcr] = useState<boolean>(false);
+
+  // Sync doc state and fetch fresh document record with all versions from backend
   useEffect(() => {
     setDoc(initialDoc);
-  }, [initialDoc]);
+    if (initialDoc?.id) {
+      api.documents.getById(initialDoc.id)
+        .then((fresh) => {
+          if (fresh) {
+            setDoc(fresh);
+          }
+        })
+        .catch((err) => console.warn('Could not load fresh document details:', err));
+    }
+  }, [initialDoc.id]);
+
+  const handleReprocessOcr = async () => {
+    setIsReprocessingOcr(true);
+    try {
+      await api.documents.retryProcessing(doc.id);
+      const fresh = await api.documents.getById(doc.id);
+      setDoc(fresh);
+      onRefresh?.();
+    } catch (err: any) {
+      alert(err.message || 'Failed to reprocess OCR / Text Extraction.');
+    } finally {
+      setIsReprocessingOcr(false);
+    }
+  };
 
   // Modals
   const [showUploadVersion, setShowUploadVersion] = useState(false);
@@ -311,36 +336,64 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
               {activeTab === 'ocr' ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="font-semibold text-slate-800 text-xs">
-                      Digitized Bitstream Text Stream (Version {selectedVersionNum})
-                    </span>
-                    {(activeVersion?.extractedText || doc.ocrText) && (
+                    <div className="flex items-center space-x-2">
+                      <span className="font-semibold text-slate-800 text-xs">
+                        Digitized Bitstream Text Stream (Version {selectedVersionNum})
+                      </span>
+                      {doc.isOcrProcessed && (
+                        <span className="px-1.5 py-0.5 bg-cyan-100 text-cyan-800 rounded text-[9px] font-bold">
+                          OCR DIGITIZED
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
                       <button
-                        onClick={() => {
-                          const text = activeVersion?.extractedText || doc.ocrText || '';
-                          navigator.clipboard.writeText(text);
-                          alert('Extracted transcript copied to clipboard.');
-                        }}
-                        className="text-blue-700 hover:underline text-[11px] font-medium"
+                        onClick={handleReprocessOcr}
+                        disabled={isReprocessingOcr || doc.processingStatus === 'PROCESSING'}
+                        className="inline-flex items-center space-x-1 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 text-blue-800 border border-blue-200 rounded text-[11px] font-medium transition cursor-pointer"
+                        title="Run optical character recognition or text extraction again"
                       >
-                        Copy Transcript
+                        <RefreshCw className={`w-3 h-3 text-blue-600 ${isReprocessingOcr ? 'animate-spin' : ''}`} />
+                        <span>{isReprocessingOcr ? 'Processing OCR...' : 'Reprocess OCR'}</span>
                       </button>
-                    )}
+                      {(activeVersion?.extractedText || doc.ocrText) && (
+                        <button
+                          onClick={() => {
+                            const text = activeVersion?.extractedText || doc.ocrText || '';
+                            navigator.clipboard.writeText(text);
+                            alert('Extracted transcript copied to clipboard.');
+                          }}
+                          className="text-blue-700 hover:underline text-[11px] font-medium cursor-pointer"
+                        >
+                          Copy Transcript
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  {doc.processingStatus === 'PROCESSING' || doc.processingStatus === 'UPLOADED' ? (
+                  {doc.processingStatus === 'PROCESSING' || doc.processingStatus === 'UPLOADED' || isReprocessingOcr ? (
                     <div className="p-8 text-center bg-amber-50/60 border border-amber-200 rounded text-amber-900 space-y-2">
                       <div className="inline-block animate-spin w-5 h-5 border-2 border-amber-600 border-t-transparent rounded-full mb-1"></div>
                       <div className="font-semibold text-xs">Text extraction in progress.</div>
                       <div className="text-[11px] text-amber-700">The document is currently undergoing native stream parsing or optical character recognition.</div>
                     </div>
                   ) : doc.processingStatus === 'PROCESSING_FAILED' ? (
-                    <div className="p-6 bg-rose-50 border border-rose-200 rounded text-rose-900 space-y-2">
+                    <div className="p-6 bg-rose-50 border border-rose-200 rounded text-rose-900 space-y-3">
                       <div className="font-semibold text-xs flex items-center space-x-1.5 text-rose-700">
                         <span>⚠</span>
                         <span>Text extraction failed.</span>
                       </div>
                       <div className="text-[11px] text-rose-800 font-mono bg-white/70 p-2.5 rounded border border-rose-200/60">
                         {doc.processingError || 'Unable to extract text from this document.'}
+                      </div>
+                      <div>
+                        <button
+                          onClick={handleReprocessOcr}
+                          disabled={isReprocessingOcr}
+                          className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-medium transition cursor-pointer shadow-xs"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isReprocessingOcr ? 'animate-spin' : ''}`} />
+                          <span>{isReprocessingOcr ? 'Retrying OCR Extraction...' : 'Retry OCR Extraction'}</span>
+                        </button>
                       </div>
                     </div>
                   ) : (

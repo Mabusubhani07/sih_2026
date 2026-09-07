@@ -147,6 +147,18 @@ export class DocumentIngestionService {
       );
 
       // 7d. Atomic Persistence & State Finalization -> State: READY
+      await prisma.documentVersion.update({
+        where: {
+          documentId_versionNumber: {
+            documentId: doc.id,
+            versionNumber: 1,
+          },
+        },
+        data: {
+          extractedText: extraction.text,
+        },
+      });
+
       const [finalizedDoc] = await prisma.$transaction([
         prisma.document.update({
           where: { id: doc.id },
@@ -160,21 +172,10 @@ export class DocumentIngestionService {
             processingError: null,
           },
           include: {
-            versions: true,
+            versions: { orderBy: { versionNumber: 'desc' } },
             metadata: true,
             createdBy: { select: { id: true, name: true, badgeNumber: true, role: true } },
             department: true,
-          },
-        }),
-        prisma.documentVersion.update({
-          where: {
-            documentId_versionNumber: {
-              documentId: doc.id,
-              versionNumber: 1,
-            },
-          },
-          data: {
-            extractedText: extraction.text,
           },
         }),
         prisma.documentMetadata.upsert({
@@ -352,6 +353,11 @@ export class DocumentIngestionService {
         },
       });
 
+      await prisma.documentVersion.update({
+        where: { id: activeVersion.id },
+        data: { extractedText: extraction.text },
+      });
+
       const updated = await prisma.document.update({
         where: { id: doc.id },
         data: {
@@ -364,7 +370,7 @@ export class DocumentIngestionService {
           processingError: null,
         },
         include: {
-          versions: true,
+          versions: { orderBy: { versionNumber: 'desc' } },
           metadata: true,
         },
       });
