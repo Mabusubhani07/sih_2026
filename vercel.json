@@ -5,7 +5,7 @@
   "regions": ["sin1"],
   "functions": {
     "api/index.ts": {
-      "includeFiles": "node_modules/.prisma/client/**",
+      "includeFiles": "{node_modules/.prisma/client/**,eng.traineddata,server/eng.traineddata}",
       "memory": 1024,
       "maxDuration": 30
     }

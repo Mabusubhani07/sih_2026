@@ -11,6 +11,8 @@ const SUPPORTED_EXTENSIONS = new Set([
   'pdf',
   'doc',
   'docx',
+  'rtf',
+  'odt',
   'txt',
   'csv',
   'json',
@@ -21,6 +23,7 @@ const SUPPORTED_EXTENSIONS = new Set([
   'png',
   'webp',
   'tiff',
+  'bmp',
   // Video Evidence
   'mp4',
   'mkv',
@@ -46,6 +49,8 @@ const MIME_MAP: Record<string, string[]> = {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/zip',
   ],
+  rtf: ['application/rtf', 'text/rtf'],
+  odt: ['application/vnd.oasis.opendocument.text'],
   txt: ['text/plain', 'text/markdown', 'application/json', 'text/csv'],
   csv: ['text/csv', 'text/plain', 'application/csv'],
   json: ['application/json', 'text/plain'],
@@ -56,6 +61,7 @@ const MIME_MAP: Record<string, string[]> = {
   png: ['image/png'],
   webp: ['image/webp'],
   tiff: ['image/tiff'],
+  bmp: ['image/bmp', 'image/x-ms-bmp'],
   // Video
   mp4: ['video/mp4', 'video/quicktime'],
   mkv: ['video/x-matroska', 'video/mkv'],
@@ -141,7 +147,7 @@ export class FileValidationService {
 
     // Determine Media Category
     let mediaCategory: 'DOCUMENT' | 'IMAGE' | 'VIDEO' | 'AUDIO' = 'DOCUMENT';
-    if (['jpg', 'jpeg', 'png', 'webp', 'tiff'].includes(ext)) {
+    if (['jpg', 'jpeg', 'png', 'webp', 'tiff', 'bmp'].includes(ext)) {
       mediaCategory = 'IMAGE';
     } else if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'wmv'].includes(ext)) {
       mediaCategory = 'VIDEO';

@@ -10,21 +10,79 @@ export interface IOCRProvider {
   recognize(imageBuffer: Buffer, language?: string): Promise<{ text: string; confidence: number; language: string }>;
 }
 
+import path from 'path';
+import fs from 'fs';
+
 /**
  * Local OCR Provider using Tesseract.js (Pure JS/WASM engine - runs locally on Node without system binaries)
  */
 export class LocalOCRProvider implements IOCRProvider {
+  private static cachedWorker: any = null;
+  private static cachedLang: string = '';
+  private static initPromise: Promise<any> | null = null;
+
+  private static async getWorker(lang: string) {
+    if (this.cachedWorker && this.cachedLang === lang) {
+      return this.cachedWorker;
+    }
+
+    if (this.initPromise) {
+      return await this.initPromise;
+    }
+
+    this.initPromise = (async () => {
+      try {
+        if (this.cachedWorker) {
+          try {
+            await this.cachedWorker.terminate();
+          } catch {
+            // ignore cleanup error
+          }
+          this.cachedWorker = null;
+        }
+
+        const { createWorker } = await import('tesseract.js');
+
+        // Automatically locate local trained language models
+        const possibleLangPaths = [
+          path.resolve(__dirname, '../../'),
+          path.resolve(__dirname, '../../../'),
+          path.resolve(process.cwd(), 'server'),
+          path.resolve(process.cwd()),
+          '/var/task',
+          '/var/task/server',
+          '/tmp',
+        ];
+        const langPath = possibleLangPaths.find((p) => fs.existsSync(path.join(p, `${lang}.traineddata`)));
+        const cachePath = process.env.VERCEL === '1' ? '/tmp' : undefined;
+
+        console.log(`[OCR] Initializing Tesseract worker (lang: ${lang}, langPath: ${langPath || 'CDN/Cache'})`);
+        const worker = await createWorker(lang, 1, {
+          langPath: langPath || undefined,
+          cachePath,
+          gzip: false,
+        });
+
+        this.cachedWorker = worker;
+        this.cachedLang = lang;
+        return worker;
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+
+    return await this.initPromise;
+  }
+
   async recognize(
     imageBuffer: Buffer,
     language: string = 'eng'
   ): Promise<{ text: string; confidence: number; language: string }> {
     const lang = language.trim() || 'eng';
-    console.log(`[OCR] Local OCR starting with engine: Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes)`);
+    console.log(`[OCR] Local OCR running with Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes)`);
 
-    const { createWorker } = await import('tesseract.js');
-    const cachePath = process.env.VERCEL === '1' ? '/tmp' : undefined;
-    const worker = await createWorker(lang, 1, { cachePath });
     try {
+      const worker = await LocalOCRProvider.getWorker(lang);
       const result = await worker.recognize(imageBuffer);
       const rawText = result.data.text || '';
       const confidence = typeof result.data.confidence === 'number' ? result.data.confidence : 0;
@@ -38,8 +96,17 @@ export class LocalOCRProvider implements IOCRProvider {
         confidence,
         language: lang,
       };
-    } finally {
-      await worker.terminate();
+    } catch (err: any) {
+      console.warn('[OCR] Worker recognize failed, resetting worker instance:', err.message);
+      if (LocalOCRProvider.cachedWorker) {
+        try {
+          await LocalOCRProvider.cachedWorker.terminate();
+        } catch {
+          // ignore
+        }
+        LocalOCRProvider.cachedWorker = null;
+      }
+      throw err;
     }
   }
 }
