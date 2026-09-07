@@ -382,37 +382,54 @@ export class DocumentController {
   }
 
   /**
-   * Cryptographic integrity check: Computes live hash of file and compares with recorded hash
+   * Cryptographic integrity check: Computes live hash of file bytes and compares with recorded hash
    */
   static async verifyIntegrity(req: Request, res: Response) {
     try {
-      const { id } = req.params;
-      const { version } = req.query;
+      const documentId = req.params.documentId || req.params.id;
+      const versionIdParam = req.params.versionId || req.query.versionId || req.body?.versionId;
+      const versionNumberParam = req.query.version || req.body?.version || req.body?.versionNumber;
       const user = req.user!;
 
       const doc = await prisma.document.findUnique({
-        where: { id },
-        include: { versions: true },
+        where: { id: documentId },
+        include: { versions: { orderBy: { versionNumber: 'desc' } } },
       });
 
       if (!doc) {
         return res.status(404).json({ error: 'Document not found.' });
       }
 
-      const targetVersionNumber = version ? parseInt(String(version), 10) : doc.currentVersionNumber;
-      const versionRecord = doc.versions.find((v) => v.versionNumber === targetVersionNumber);
-
-      if (!versionRecord) {
-        return res.status(404).json({ error: `Version v${targetVersionNumber} not found.` });
+      if (!doc.versions || doc.versions.length === 0) {
+        return res.status(404).json({ error: 'No stored revisions found for this document.' });
       }
 
-      // Live verification by calculating SHA-256 of stored bytes
+      // Version-specific resolution
+      let versionRecord = undefined;
+      if (versionIdParam) {
+        versionRecord = doc.versions.find(
+          (v) => v.id === versionIdParam || String(v.versionNumber) === String(versionIdParam)
+        );
+      } else if (versionNumberParam !== undefined) {
+        const targetNum = parseInt(String(versionNumberParam), 10);
+        versionRecord = doc.versions.find((v) => v.versionNumber === targetNum);
+      } else {
+        versionRecord = doc.versions.find((v) => v.versionNumber === doc.currentVersionNumber) || doc.versions[0];
+      }
+
+      if (!versionRecord) {
+        return res.status(404).json({
+          error: `Requested version (${versionIdParam || versionNumberParam || 'current'}) not found for document ${doc.documentNumber}.`,
+        });
+      }
+
+      // Live verification by calculating SHA-256 of actual stored disk bytes
       const verificationResult = await HashService.verifyFileIntegrity(
         versionRecord.storagePath,
         versionRecord.sha256Hash
       );
 
-      // Audit Log
+      // Audit Log with complete evidentiary custody details
       await AuditService.log({
         userId: user.id,
         userRole: user.role,
@@ -423,24 +440,40 @@ export class DocumentController {
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
         details: {
-          version: targetVersionNumber,
-          verified: verificationResult.verified,
+          caseId: doc.caseId,
+          documentId: doc.id,
+          documentNumber: doc.documentNumber,
+          versionId: versionRecord.id,
+          versionNumber: versionRecord.versionNumber,
+          fileName: versionRecord.originalFileName,
+          verificationResult: verificationResult.status,
+          status: verificationResult.status,
           algorithm: verificationResult.algorithm,
           recordedHash: verificationResult.recordedHash,
           calculatedHash: verificationResult.calculatedHash,
+          fileSizeBytes: verificationResult.fileSizeBytes,
+          checkedAt: verificationResult.checkedAt,
         },
       });
 
       return res.json({
-        ...verificationResult,
+        verified: verificationResult.verified,
+        status: verificationResult.status,
+        integrityStatus: verificationResult.status,
+        algorithm: verificationResult.algorithm,
+        recordedHash: verificationResult.recordedHash,
+        calculatedHash: verificationResult.calculatedHash,
+        checkedAt: verificationResult.checkedAt,
+        fileSizeBytes: verificationResult.fileSizeBytes,
         documentId: doc.id,
         documentNumber: doc.documentNumber,
-        versionNumber: targetVersionNumber,
+        versionId: versionRecord.id,
+        versionNumber: versionRecord.versionNumber,
         originalFileName: versionRecord.originalFileName,
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('verifyIntegrity error:', err);
-      return res.status(500).json({ error: 'Failed to complete cryptographic verification check.' });
+      return res.status(500).json({ error: err.message || 'Failed to complete cryptographic verification check.' });
     }
   }
 

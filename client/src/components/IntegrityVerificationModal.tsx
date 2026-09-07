@@ -17,7 +17,8 @@ export const IntegrityVerificationModal: React.FC<Props> = ({ document, onClose 
   const handleVerify = async () => {
     setIsVerifying(true);
     try {
-      const result = await api.documents.verifyIntegrity(document.id, selectedVersion);
+      const verRecord = (document.versions || []).find((v) => v.versionNumber === selectedVersion);
+      const result = await api.documents.verifyIntegrity(document.id, selectedVersion, verRecord?.id);
       setVerificationResult(result);
     } catch (err: any) {
       alert(err.message || 'Integrity check failed to execute.');

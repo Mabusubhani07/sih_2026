@@ -304,6 +304,8 @@ export interface SummaryResult {
 
 export interface IntegrityResult {
   verified: boolean;
+  status: 'INTEGRITY_VERIFIED' | 'INTEGRITY_FAILED';
+  integrityStatus?: 'INTEGRITY_VERIFIED' | 'INTEGRITY_FAILED';
   algorithm: string;
   recordedHash: string;
   calculatedHash: string;
@@ -311,6 +313,7 @@ export interface IntegrityResult {
   fileSizeBytes: number;
   documentId: string;
   documentNumber: string;
+  versionId?: string;
   versionNumber: number;
   originalFileName: string;
 }

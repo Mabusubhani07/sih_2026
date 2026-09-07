@@ -162,9 +162,16 @@ export const api = {
       }
       return response.blob();
     },
-    verifyIntegrity: async (id: string, versionNumber?: number) => {
-      const query = versionNumber ? `?version=${versionNumber}` : '';
-      return request<IntegrityResult>(`/documents/${id}/verify${query}`, {
+    verifyIntegrity: async (id: string, versionNumber?: number, versionId?: string) => {
+      const endpoint = versionId
+        ? `/documents/${id}/versions/${versionId}/verify-integrity`
+        : `/documents/${id}/verify${versionNumber ? `?version=${versionNumber}` : ''}`;
+      return request<IntegrityResult>(endpoint, {
+        method: 'POST',
+      });
+    },
+    verifyVersionIntegrity: async (documentId: string, versionId: string) => {
+      return request<IntegrityResult>(`/documents/${documentId}/versions/${versionId}/verify-integrity`, {
         method: 'POST',
       });
     },
@@ -228,7 +235,13 @@ export const api = {
       if (filters.status) params.append('status', filters.status);
       return request<Evidence[]>(`/evidence?${params.toString()}`);
     },
-    create: async (data: Partial<Evidence>) => {
+    create: async (data: Partial<Evidence> | FormData) => {
+      if (data instanceof FormData) {
+        return request<Evidence>('/evidence', {
+          method: 'POST',
+          body: data,
+        });
+      }
       return request<Evidence>('/evidence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -69,6 +69,7 @@ export const CaseWorkspace: React.FC = () => {
   const [newEvidenceDesc, setNewEvidenceDesc] = useState<string>('');
   const [newEvidenceCat, setNewEvidenceCat] = useState<string>('DIGITAL');
   const [newEvidenceLoc, setNewEvidenceLoc] = useState<string>('Evidence Locker Room B, Shelf 4');
+  const [newEvidenceFile, setNewEvidenceFile] = useState<File | null>(null);
   const [isAddingEvidence, setIsAddingEvidence] = useState<boolean>(false);
 
   const fetchCaseDetails = async () => {
@@ -108,16 +109,28 @@ export const CaseWorkspace: React.FC = () => {
     if (!caseData) return;
     setIsAddingEvidence(true);
     try {
-      await api.evidence.create({
-        caseId: caseData.id,
-        title: newEvidenceTitle.trim(),
-        description: newEvidenceDesc.trim(),
-        category: newEvidenceCat as any,
-        custodyLocation: newEvidenceLoc.trim(),
-      });
+      if (newEvidenceFile) {
+        const formData = new FormData();
+        formData.append('caseId', caseData.id);
+        formData.append('title', newEvidenceTitle.trim());
+        formData.append('description', newEvidenceDesc.trim());
+        formData.append('category', newEvidenceCat);
+        formData.append('custodyLocation', newEvidenceLoc.trim());
+        formData.append('file', newEvidenceFile);
+        await api.evidence.create(formData);
+      } else {
+        await api.evidence.create({
+          caseId: caseData.id,
+          title: newEvidenceTitle.trim(),
+          description: newEvidenceDesc.trim(),
+          category: newEvidenceCat as any,
+          custodyLocation: newEvidenceLoc.trim(),
+        });
+      }
       setShowAddEvidence(false);
       setNewEvidenceTitle('');
       setNewEvidenceDesc('');
+      setNewEvidenceFile(null);
       fetchCaseDetails();
     } catch (err: any) {
       alert(err.message || 'Failed to add evidence.');
@@ -129,11 +142,13 @@ export const CaseWorkspace: React.FC = () => {
   const handleVerifyEvidence = async (evidenceId: string) => {
     try {
       const res = await api.evidence.verify(evidenceId);
-      alert(
-        res.integrityStatus === 'VERIFIED'
-          ? 'Evidence integrity verified: Bitstream checksum matches master record.'
-          : 'Integrity mismatch detected.'
-      );
+      if (res.integrityStatus === 'VERIFIED') {
+        alert('✓ Integrity Verified: Stored bitstream SHA-256 matches immutable custody record exactly.');
+      } else if (res.integrityStatus === 'COMPROMISED') {
+        alert('✕ Integrity Verification Failed: Bitstream hash mismatch detected! Evidence artifact has been modified.');
+      } else {
+        alert(`Integrity Status: ${res.integrityStatus}\n${res.verificationDetails?.message || 'Evidence custody logged.'}`);
+      }
       fetchCaseDetails();
     } catch (err: any) {
       alert(err.message || 'Failed to verify evidence.');
@@ -820,6 +835,22 @@ export const CaseWorkspace: React.FC = () => {
                   placeholder="Seized at scene under memo..."
                   className="w-full bg-white border border-slate-300 rounded p-2 text-xs text-slate-900 focus:outline-none focus:border-blue-600"
                 />
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Attach Evidence File (Document, Video, Audio - Optional)
+                </label>
+                <input
+                  type="file"
+                  onChange={(e) => setNewEvidenceFile(e.target.files?.[0] || null)}
+                  accept=".pdf,.doc,.docx,.txt,.csv,.json,.md,.jpg,.jpeg,.png,.webp,.mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.ogg,.flac"
+                  className="w-full text-xs text-slate-600 file:mr-2 file:py-1 file:px-2.5 file:rounded file:border-0 file:text-xs file:font-medium file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
+                />
+                {newEvidenceFile && (
+                  <p className="text-[10px] text-emerald-700 mt-1 font-mono">
+                    Selected: {newEvidenceFile.name} ({(newEvidenceFile.size / (1024 * 1024)).toFixed(2)} MB) — SHA-256 seal will be computed from file bytes.
+                  </p>
+                )}
               </div>
               <div className="pt-2 flex justify-end space-x-2 border-t border-slate-200">
                 <button

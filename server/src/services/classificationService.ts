@@ -14,6 +14,39 @@ export class ClassificationService {
     const nameLower = (fileName || '').toLowerCase();
     const combined = `${nameLower} ${textLower}`;
 
+    // 0. Multimedia Exhibits (Video & Audio Containers take precedence based on file signature)
+    const fileExt = (fileName.split('.').pop() || '').toLowerCase();
+    if (
+      ['mp4', 'mkv', 'avi', 'mov', 'webm', 'wmv'].includes(fileExt) ||
+      combined.includes('cctv') ||
+      combined.includes('surveillance video') ||
+      combined.includes('dashcam') ||
+      combined.includes('bodycam') ||
+      combined.includes('video recording')
+    ) {
+      return {
+        documentType: 'EVIDENCE',
+        subCategory: 'Surveillance & Video Evidence',
+        confidence: 0.96,
+        rationale: 'Identified video exhibit container registered under statutory electronic chain of custody.',
+      };
+    }
+
+    if (
+      ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'wma'].includes(fileExt) ||
+      combined.includes('wiretap') ||
+      combined.includes('call recording') ||
+      combined.includes('voice memo') ||
+      combined.includes('audio intercept')
+    ) {
+      return {
+        documentType: 'EVIDENCE',
+        subCategory: 'Audio Intercept & Wiretap',
+        confidence: 0.96,
+        rationale: 'Identified acoustic audio exhibit registered under statutory electronic chain of custody.',
+      };
+    }
+
     // 1. Forensic Report (Laboratory examinations, bitstream telemetry, ballistics)
     if (
       combined.includes('forensic') ||

@@ -4,6 +4,8 @@ import { authenticateJwt } from '../middleware/auth';
 import { requireRoles } from '../middleware/rbac';
 import { ROLES } from '../config/constants';
 
+import { upload } from '../middleware/upload';
+
 const router = Router();
 
 router.use(authenticateJwt);
@@ -12,6 +14,7 @@ router.get('/', EvidenceController.getEvidence);
 router.post(
   '/',
   requireRoles(ROLES.POLICE_OFFICER, ROLES.INVESTIGATOR, ROLES.FORENSIC_OFFICER, ROLES.ADMIN),
+  upload.single('file'),
   EvidenceController.createEvidence
 );
 router.post('/:id/verify', EvidenceController.verifyEvidence);

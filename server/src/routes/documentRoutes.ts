@@ -21,6 +21,8 @@ router.put('/:id/classification', requireDocumentAccess('WRITE'), DocumentContro
 router.put('/:id/metadata', requireDocumentAccess('WRITE'), DocumentController.updateMetadata);
 router.post('/:id/retry-processing', requireDocumentAccess('WRITE'), DocumentController.retryProcessing);
 router.post('/:id/verify', requireDocumentAccess('READ'), DocumentController.verifyIntegrity);
+router.post('/:id/verify-integrity', requireDocumentAccess('READ'), DocumentController.verifyIntegrity);
+router.post('/:id/versions/:versionId/verify-integrity', requireDocumentAccess('READ'), DocumentController.verifyIntegrity);
 router.post('/:id/archive', requireDocumentAccess('WRITE'), DocumentController.archiveDocument);
 router.post('/:id/share', requireDocumentAccess('WRITE'), DocumentController.shareDocument);
 router.delete('/:id/share/:shareId', requireDocumentAccess('WRITE'), DocumentController.revokeShare);

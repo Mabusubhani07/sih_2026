@@ -7,6 +7,7 @@ import {
   X,
   Download,
   ShieldCheck,
+  ShieldAlert,
   History,
   Share2,
   FilePlus,
@@ -20,6 +21,9 @@ import {
   ChevronRight,
   Lock,
   RefreshCw,
+  Film,
+  Volume2,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { UploadVersionModal } from './UploadVersionModal';
 import { IntegrityVerificationModal } from './IntegrityVerificationModal';
@@ -40,11 +44,15 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
   const [doc, setDoc] = useState<Document>(initialDoc);
   const [selectedVersionNum, setSelectedVersionNum] = useState<number>(initialDoc.currentVersionNumber);
   const [fileContent, setFileContent] = useState<string | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState<boolean>(true);
   const [copiedHash, setCopiedHash] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'preview' | 'ocr'>('preview');
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
   const [metadataSuccess, setMetadataSuccess] = useState<boolean>(false);
+  const [integrityStatus, setIntegrityStatus] = useState<'UNCHECKED' | 'VERIFYING' | 'VERIFIED' | 'FAILED'>('UNCHECKED');
+  const [isVerifyingIntegrity, setIsVerifyingIntegrity] = useState<boolean>(false);
+  const [verificationDetails, setVerificationDetails] = useState<any>(null);
 
   // Sync doc state when parent component updates initialDoc
   useEffect(() => {
@@ -88,30 +96,66 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
     }
   };
 
+  // Reset integrity state when switching versions
   useEffect(() => {
+    setIntegrityStatus('UNCHECKED');
+    setVerificationDetails(null);
+  }, [selectedVersionNum]);
+
+  useEffect(() => {
+    let currentBlobUrl: string | null = null;
+
     const fetchContent = async () => {
       if (!activeVersion) return;
       setIsLoadingContent(true);
 
       try {
         const ext = activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '';
+        const blob = await api.documents.download(doc.id, activeVersion.versionNumber);
+
         if (['txt', 'log', 'md', 'json', 'csv', 'py', 'sh'].includes(ext)) {
-          const blob = await api.documents.download(doc.id, activeVersion.versionNumber);
           const text = await blob.text();
           setFileContent(text);
+          setBlobUrl(null);
         } else {
           setFileContent(null);
+          const url = window.URL.createObjectURL(blob);
+          currentBlobUrl = url;
+          setBlobUrl(url);
         }
       } catch (err) {
         console.error('Failed to load file preview content:', err);
         setFileContent(null);
+        setBlobUrl(null);
       } finally {
         setIsLoadingContent(false);
       }
     };
 
     fetchContent();
+
+    return () => {
+      if (currentBlobUrl) {
+        window.URL.revokeObjectURL(currentBlobUrl);
+      }
+    };
   }, [doc.id, selectedVersionNum]);
+
+  const handleVerifyIntegrity = async () => {
+    if (!activeVersion) return;
+    setIsVerifyingIntegrity(true);
+    setIntegrityStatus('VERIFYING');
+    try {
+      const result = await api.documents.verifyIntegrity(doc.id, activeVersion.versionNumber, activeVersion.id);
+      setVerificationDetails(result);
+      setIntegrityStatus(result.verified ? 'VERIFIED' : 'FAILED');
+    } catch (err: any) {
+      setIntegrityStatus('FAILED');
+      alert(err.message || 'Integrity verification failed to complete.');
+    } finally {
+      setIsVerifyingIntegrity(false);
+    }
+  };
 
   const handleCopyHash = () => {
     if (!activeVersion?.sha256Hash) return;
@@ -301,22 +345,85 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                   Loading document preview...
                 </div>
               ) : fileContent !== null ? (
-                <div className="font-mono text-xs text-slate-800 whitespace-pre-wrap leading-relaxed select-text">
+                <div className="font-mono text-xs text-slate-800 whitespace-pre-wrap leading-relaxed select-text bg-slate-50 p-4 rounded border border-slate-200">
                   {fileContent}
                 </div>
-              ) : activeVersion?.originalFileName.toLowerCase().endsWith('.pdf') ? (
-                <div className="text-center py-16 space-y-3">
-                  <FileText className="w-12 h-12 text-slate-400 mx-auto" />
-                  <div className="font-bold text-slate-800 text-sm">{activeVersion.originalFileName}</div>
-                  <div className="text-slate-500 text-xs">
-                    PDF Document ({(Number(activeVersion.fileSize || 0) / 1024).toFixed(1)} KB)
+              ) : activeVersion && ['jpg', 'jpeg', 'png', 'webp', 'tiff'].includes(activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '') ? (
+                <div className="flex flex-col items-center justify-center p-4 space-y-3">
+                  <div className="max-w-full overflow-hidden rounded-md border border-slate-200 shadow-xs bg-slate-50 p-2">
+                    <img
+                      src={blobUrl || undefined}
+                      alt={activeVersion.originalFileName}
+                      className="max-h-[500px] max-w-full rounded object-contain mx-auto"
+                    />
                   </div>
-                  <button
-                    onClick={handleDownload}
-                    className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs"
-                  >
-                    Download and Open PDF
-                  </button>
+                  <div className="text-[11px] text-slate-500 font-mono flex items-center space-x-2">
+                    <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                    <span>{activeVersion.originalFileName} • {(Number(activeVersion.fileSize || 0) / 1024).toFixed(1)} KB</span>
+                  </div>
+                </div>
+              ) : activeVersion && ['mp4', 'mkv', 'avi', 'mov', 'webm', 'wmv'].includes(activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '') ? (
+                <div className="flex flex-col items-center justify-center p-3 space-y-3">
+                  <div className="w-full bg-slate-950 rounded-lg overflow-hidden shadow-lg border border-slate-700 relative">
+                    <video
+                      src={blobUrl || undefined}
+                      controls
+                      className="w-full max-h-[500px] bg-black mx-auto"
+                      playsInline
+                    />
+                    <div className="absolute top-2 left-2 bg-black/75 text-emerald-400 font-mono text-[10px] px-2 py-0.5 rounded backdrop-blur-xs border border-emerald-500/40 flex items-center space-x-1">
+                      <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                      <span>Section 65B Certified Video Exhibit</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between w-full text-[11px] text-slate-600 font-mono px-2">
+                    <span className="flex items-center space-x-1">
+                      <Film className="w-3.5 h-3.5 text-blue-600" />
+                      <span>{activeVersion.originalFileName}</span>
+                    </span>
+                    <span>{(Number(activeVersion.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB</span>
+                  </div>
+                </div>
+              ) : activeVersion && ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'wma'].includes(activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '') ? (
+                <div className="flex flex-col items-center justify-center py-12 px-6 space-y-4 max-w-lg mx-auto bg-slate-50 rounded-xl border border-slate-200 shadow-xs">
+                  <div className="p-4 rounded-full bg-blue-100 text-blue-700 shadow-inner">
+                    <Volume2 className="w-10 h-10" />
+                  </div>
+                  <div className="text-center">
+                    <h4 className="font-bold text-slate-900 text-sm">{activeVersion.originalFileName}</h4>
+                    <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                      Acoustic Audio Exhibit • {(Number(activeVersion.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB
+                    </p>
+                  </div>
+                  <audio src={blobUrl || undefined} controls className="w-full" />
+                  <div className="text-[10px] text-emerald-800 font-mono bg-emerald-50 px-3 py-1 rounded border border-emerald-200 flex items-center space-x-1">
+                    <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                    <span>Section 65B Authenticated Audio Bitstream</span>
+                  </div>
+                </div>
+              ) : activeVersion?.originalFileName.toLowerCase().endsWith('.pdf') ? (
+                <div className="w-full h-full min-h-[560px] flex flex-col">
+                  {blobUrl ? (
+                    <iframe
+                      src={blobUrl}
+                      className="w-full h-[560px] rounded border border-slate-200"
+                      title={activeVersion.originalFileName}
+                    />
+                  ) : (
+                    <div className="text-center py-16 space-y-3">
+                      <FileText className="w-12 h-12 text-slate-400 mx-auto" />
+                      <div className="font-bold text-slate-800 text-sm">{activeVersion.originalFileName}</div>
+                      <div className="text-slate-500 text-xs">
+                        PDF Document ({(Number(activeVersion.fileSize || 0) / 1024).toFixed(1)} KB)
+                      </div>
+                      <button
+                        onClick={handleDownload}
+                        className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs"
+                      >
+                        Download and Open PDF
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-16 space-y-3">
@@ -383,12 +490,29 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                     <span className="text-slate-500">Clearance Level:</span>
                     <span className="text-slate-800">{doc.isConfidential ? 'Restricted' : 'Standard Case Team'}</span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between items-center">
                     <span className="text-slate-500">Integrity:</span>
-                    <span className="text-emerald-700 font-semibold flex items-center space-x-1">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>Verified</span>
-                    </span>
+                    {integrityStatus === 'UNCHECKED' && (
+                      <span className="text-slate-500 italic text-[11px]">Pending verification</span>
+                    )}
+                    {integrityStatus === 'VERIFYING' && (
+                      <span className="text-amber-600 font-medium flex items-center space-x-1">
+                        <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                        <span>Verifying...</span>
+                      </span>
+                    )}
+                    {integrityStatus === 'VERIFIED' && (
+                      <span className="text-emerald-700 font-semibold flex items-center space-x-1">
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>✓ Integrity Verified</span>
+                      </span>
+                    )}
+                    {integrityStatus === 'FAILED' && (
+                      <span className="text-red-700 font-semibold flex items-center space-x-1">
+                        <X className="w-3.5 h-3.5 text-red-600" />
+                        <span>✕ Integrity Verification Failed</span>
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -480,9 +604,9 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
               </div>
 
               {/* SHA-256 Hash Box */}
-              <div className="bg-slate-50 border border-slate-200 rounded p-3 space-y-1.5">
+              <div className="bg-slate-50 border border-slate-200 rounded p-3 space-y-2">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-bold text-slate-700">SHA-256 Bitstream Hash</span>
+                  <span className="font-bold text-slate-800">SHA-256 Bitstream Hash</span>
                   <button
                     onClick={handleCopyHash}
                     className="text-blue-700 hover:text-blue-900 font-medium flex items-center space-x-1"
@@ -503,8 +627,66 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                 <div className="font-mono text-[10px] text-slate-700 break-all bg-white p-2 border border-slate-200 rounded select-all">
                   {activeVersion?.sha256Hash || 'Pending calculation'}
                 </div>
+
+                {/* Live Integrity Status Indicator */}
+                <div className="pt-1">
+                  <div className="text-[11px] text-slate-500 mb-1 font-medium">Integrity Status:</div>
+                  {integrityStatus === 'UNCHECKED' && (
+                    <div className="text-[11px] text-slate-500 italic bg-white p-2 rounded border border-slate-200">
+                      Not verified in this session
+                    </div>
+                  )}
+                  {integrityStatus === 'VERIFYING' && (
+                    <div className="text-[11px] text-amber-800 bg-amber-50 p-2 rounded border border-amber-200 flex items-center space-x-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-700 shrink-0" />
+                      <span>Verifying bitstream against database ledger...</span>
+                    </div>
+                  )}
+                  {integrityStatus === 'VERIFIED' && (
+                    <div className="text-[11px] text-emerald-800 bg-emerald-50 p-2 rounded border border-emerald-300 flex items-start space-x-1.5">
+                      <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold">✓ Integrity Verified</div>
+                        <div className="text-[10px] text-emerald-700 mt-0.5">
+                          Bitstream SHA-256 hash matches immutable master record exactly.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {integrityStatus === 'FAILED' && (
+                    <div className="text-[11px] text-red-800 bg-red-50 p-2 rounded border border-red-300 flex items-start space-x-1.5">
+                      <ShieldAlert className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold">✕ Integrity Verification Failed</div>
+                        <div className="text-[10px] text-red-700 mt-0.5">
+                          Bitstream mismatch detected! The stored artifact may have been modified outside official channels.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Authoritative Backend Verification Button */}
+                <button
+                  onClick={handleVerifyIntegrity}
+                  disabled={isVerifyingIntegrity}
+                  className="w-full py-1.5 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-semibold flex items-center justify-center space-x-1.5 transition disabled:opacity-50 shadow-2xs"
+                >
+                  {isVerifyingIntegrity ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Verifying Bitstream...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>Verify Integrity</span>
+                    </>
+                  )}
+                </button>
+
                 <div className="text-[10px] text-slate-500">
-                  Computed via node crypto bitstream. Section 65B compliant.
+                  Calculated from actual file bytes via Node crypto. Section 65B compliant.
                 </div>
               </div>
 

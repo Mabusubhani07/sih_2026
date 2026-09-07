@@ -86,12 +86,13 @@ export const UploadVersionModal: React.FC<Props> = ({ document, onClose, onVersi
 
           <div>
             <label className="block font-medium text-slate-700 mb-1">
-              Revised File Payload <span className="text-red-500">*</span>
+              Revised File Payload (Documents, Video, Audio) <span className="text-red-500">*</span>
             </label>
             <div className="border border-dashed border-slate-300 rounded p-4 text-center bg-slate-50/60 hover:bg-slate-50 transition cursor-pointer relative">
               <input
                 type="file"
                 onChange={(e) => e.target.files && setFile(e.target.files[0])}
+                accept=".pdf,.doc,.docx,.txt,.csv,.json,.md,.jpg,.jpeg,.png,.webp,.mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.ogg,.flac"
                 className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                 required
               />
@@ -105,7 +106,7 @@ export const UploadVersionModal: React.FC<Props> = ({ document, onClose, onVersi
                 <div className="space-y-1 text-slate-500">
                   <Upload className="w-6 h-6 text-slate-400 mx-auto" />
                   <div className="font-medium text-slate-700">Select revised file payload</div>
-                  <div className="text-[11px] text-slate-400">Creates non-destructive v{nextVerNumber} revision</div>
+                  <div className="text-[11px] text-slate-400">Creates non-destructive v{nextVerNumber} revision with fresh SHA-256 seal</div>
                 </div>
               )}
             </div>
