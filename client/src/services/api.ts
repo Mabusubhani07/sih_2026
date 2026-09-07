@@ -224,6 +224,27 @@ export const api = {
         `/documents/${id}/ocr-text`
       );
     },
+    retranscribe: async (id: string, version?: number) => {
+      const query = version ? `?version=${version}` : '';
+      return request<{
+        message: string;
+        transcriptText: string;
+        segments: Array<{ startTime: string; endTime: string; speaker?: string; text: string }>;
+        method: string;
+        confidence: number;
+        durationSec: number;
+        metadataSummary: string;
+      }>(`/documents/${id}/transcribe${query}`, {
+        method: 'POST',
+      });
+    },
+    updateTranscript: async (id: string, transcriptText: string, versionNumber?: number) => {
+      return request<{ message: string; ocrText: string; versionNumber: number }>(`/documents/${id}/transcript`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcriptText, versionNumber }),
+      });
+    },
   },
 
   // Evidence

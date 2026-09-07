@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 import { Document, DocumentVersion } from '../types';
 import { StatusBadge } from './StatusBadge';
@@ -24,6 +24,11 @@ import {
   Film,
   Volume2,
   Image as ImageIcon,
+  Mic,
+  MicOff,
+  Play,
+  Edit3,
+  Save,
 } from 'lucide-react';
 import { UploadVersionModal } from './UploadVersionModal';
 import { IntegrityVerificationModal } from './IntegrityVerificationModal';
@@ -82,6 +87,380 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
     } finally {
       setIsReprocessingOcr(false);
     }
+  };
+
+  // Audio & Video Transcription & Steno States
+  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const [currentPlaybackTime, setCurrentPlaybackTime] = useState<number>(0);
+  const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
+  const [isLiveListening, setIsLiveListening] = useState<boolean>(false);
+  const [liveTranscript, setLiveTranscript] = useState<string>('');
+  const speechRecognitionRef = useRef<any>(null);
+  const [isEditingTranscript, setIsEditingTranscript] = useState<boolean>(false);
+  const [editedTranscriptText, setEditedTranscriptText] = useState<string>('');
+  const [transcriptSuccessMsg, setTranscriptSuccessMsg] = useState<string | null>(null);
+
+  const formatDurationHelper = (seconds: number) => {
+    const s = Math.max(0, Math.floor(seconds));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const parseTimeToSeconds = (timeStr: string): number => {
+    if (!timeStr) return 0;
+    const clean = timeStr.replace(/[^0-9:.]/g, '').split('.')[0];
+    const parts = clean.split(':').map(Number);
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return parts[0] || 0;
+  };
+
+  const handleSeekToTime = (timeStr: string) => {
+    const seconds = parseTimeToSeconds(timeStr);
+    if (mediaRef.current) {
+      mediaRef.current.currentTime = seconds;
+      mediaRef.current.play().catch(() => {});
+    }
+  };
+
+  const handleAiRetranscribe = async () => {
+    setIsTranscribing(true);
+    try {
+      const res = await api.documents.retranscribe(doc.id, selectedVersionNum);
+      const updatedText = res.transcriptText;
+      setDoc((prev) => ({
+        ...prev,
+        ocrText: updatedText,
+        isOcrProcessed: true,
+        versions: prev.versions?.map((v) =>
+          v.versionNumber === selectedVersionNum ? { ...v, extractedText: updatedText } : v
+        ),
+      }));
+      setTranscriptSuccessMsg('High-accuracy transcript generated and sealed.');
+      setTimeout(() => setTranscriptSuccessMsg(null), 4000);
+      onRefresh?.();
+    } catch (err: any) {
+      alert(err.message || 'Failed to generate transcription.');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const handleSaveTranscript = async (textToSave: string) => {
+    try {
+      await api.documents.updateTranscript(doc.id, textToSave, selectedVersionNum);
+      setDoc((prev) => ({
+        ...prev,
+        ocrText: textToSave,
+        isOcrProcessed: true,
+        versions: prev.versions?.map((v) =>
+          v.versionNumber === selectedVersionNum ? { ...v, extractedText: textToSave } : v
+        ),
+      }));
+      setIsEditingTranscript(false);
+      setTranscriptSuccessMsg('Transcript updated and certified under Section 65B.');
+      setTimeout(() => setTranscriptSuccessMsg(null), 4000);
+      onRefresh?.();
+    } catch (err: any) {
+      alert(err.message || 'Failed to save transcript.');
+    }
+  };
+
+  const toggleBrowserSpeechRecognition = () => {
+    if (isLiveListening) {
+      if (speechRecognitionRef.current) {
+        speechRecognitionRef.current.stop();
+      }
+      setIsLiveListening(false);
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Speech Recognition is not natively supported in this browser. Please use Chrome or Edge.');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setIsLiveListening(true);
+        setLiveTranscript('');
+      };
+
+      recognition.onresult = (event: any) => {
+        let final = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript + ' ';
+          }
+        }
+        if (final.trim().length > 0) {
+          const currentTime = mediaRef.current ? mediaRef.current.currentTime : currentPlaybackTime;
+          const timeStr = formatDurationHelper(currentTime);
+          const line = `[${timeStr}] Speaker: "${final.trim()}"`;
+          setLiveTranscript((prev) => (prev ? `${prev}\n${line}` : line));
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition warning:', event.error);
+        if (event.error !== 'no-speech') {
+          setIsLiveListening(false);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsLiveListening(false);
+      };
+
+      speechRecognitionRef.current = recognition;
+      recognition.start();
+    } catch (err: any) {
+      alert('Could not initialize Speech Recognition: ' + err.message);
+    }
+  };
+
+  const parseTranscriptSegments = (rawText: string) => {
+    if (!rawText) return [];
+    const lines = rawText.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+    const list: Array<{ time: string; startSec: number; speaker: string; text: string }> = [];
+
+    for (const line of lines) {
+      if (
+        line.startsWith('===') ||
+        line.startsWith('---') ||
+        line.startsWith('Exhibit Name:') ||
+        line.startsWith('Acoustic Container:') ||
+        line.startsWith('Audio Encoding:') ||
+        line.startsWith('Channel Configuration:') ||
+        line.startsWith('Sampling Frequency:') ||
+        line.startsWith('Quantization Bit Depth:') ||
+        line.startsWith('Calculated Playback Duration:') ||
+        line.startsWith('Bitstream Payload Size:') ||
+        line.startsWith('Container Format:') ||
+        line.startsWith('Codec Profile / Brand:') ||
+        line.startsWith('Display Resolution:') ||
+        line.startsWith('Calculated Stream Duration:') ||
+        line.startsWith('Audio Track Embedded:') ||
+        line.startsWith('Statutory Compliance:') ||
+        line.startsWith('Transcription Engine:') ||
+        line.startsWith('Cryptographic Seal:') ||
+        line.startsWith('I hereby certify')
+      ) {
+        continue;
+      }
+
+      const match = line.match(/^\[([^\]]+)\]\s*(?:([^:]+):\s*)?(.*)$/);
+      if (match) {
+        const timeRange = match[1];
+        const startPart = timeRange.split('-')[0].trim();
+        const startSec = parseTimeToSeconds(startPart);
+        const speaker = match[2]?.trim() || 'Recorded Audio';
+        const text = match[3]?.trim() || line;
+
+        list.push({ time: timeRange, startSec, speaker, text });
+      } else if (list.length > 0 && line.length > 0) {
+        list[list.length - 1].text += ' ' + line;
+      }
+    }
+    return list;
+  };
+
+  const renderInteractiveTranscript = (isVideoFile: boolean) => {
+    const fullRaw = activeVersion?.extractedText || doc.ocrText || '';
+    const segments = parseTranscriptSegments(fullRaw);
+
+    return (
+      <div className="w-full bg-white rounded-lg border border-slate-200 overflow-hidden shadow-2xs mt-4 text-left">
+        <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center space-x-2">
+            <span className="font-bold text-xs uppercase tracking-wider text-slate-800 flex items-center space-x-1.5">
+              {isVideoFile ? <Film className="w-3.5 h-3.5 text-blue-600" /> : <Volume2 className="w-3.5 h-3.5 text-blue-600" />}
+              <span>Forensic Time-Coded Transcript</span>
+            </span>
+            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full text-[10px] font-semibold flex items-center space-x-1">
+              <ShieldCheck className="w-3 h-3 text-emerald-600" />
+              <span>Sec. 65B Certified</span>
+            </span>
+          </div>
+
+          <div className="flex items-center space-x-1.5">
+            <button
+              onClick={handleAiRetranscribe}
+              disabled={isTranscribing}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-[11px] font-medium transition cursor-pointer shadow-2xs"
+              title="Run High-Accuracy Cloud/Acoustic Speech-to-Text Model"
+            >
+              <Sparkles className={`w-3 h-3 text-white ${isTranscribing ? 'animate-spin' : ''}`} />
+              <span>{isTranscribing ? 'Transcribing...' : 'AI Transcribe Exhibit'}</span>
+            </button>
+
+            <button
+              onClick={toggleBrowserSpeechRecognition}
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-[11px] font-medium transition cursor-pointer border ${
+                isLiveListening
+                  ? 'bg-rose-50 text-rose-700 border-rose-300 animate-pulse'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+              }`}
+              title="Live speech-to-text recognition via browser microphone / playback"
+            >
+              {isLiveListening ? <MicOff className="w-3 h-3 text-rose-600" /> : <Mic className="w-3 h-3 text-slate-600" />}
+              <span>{isLiveListening ? 'Stop Listening' : 'Live Browser STT'}</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (!isEditingTranscript) {
+                  setEditedTranscriptText(activeVersion?.extractedText || doc.ocrText || '');
+                }
+                setIsEditingTranscript(!isEditingTranscript);
+              }}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded text-[11px] font-medium transition cursor-pointer"
+              title="Edit transcript text and speaker labels"
+            >
+              <Edit3 className="w-3 h-3 text-slate-600" />
+              <span>{isEditingTranscript ? 'Cancel' : 'Edit Transcript'}</span>
+            </button>
+
+            <button
+              onClick={() => {
+                const t = activeVersion?.extractedText || doc.ocrText || '';
+                navigator.clipboard.writeText(t);
+                alert('Full transcript copied to clipboard.');
+              }}
+              className="inline-flex items-center space-x-1 px-2 py-1 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded text-[11px] font-medium transition cursor-pointer"
+              title="Copy transcript"
+            >
+              <Copy className="w-3 h-3 text-slate-500" />
+            </button>
+          </div>
+        </div>
+
+        {transcriptSuccessMsg && (
+          <div className="mx-3 mt-2.5 p-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded flex items-center space-x-1.5 text-[11px] font-medium">
+            <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span>{transcriptSuccessMsg}</span>
+          </div>
+        )}
+
+        {isLiveListening && (
+          <div className="mx-3 mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded text-rose-900 space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold text-rose-800">
+              <span className="flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping"></span>
+                <span>Listening... Play audio/video to transcribe spoken words in real time.</span>
+              </span>
+              {liveTranscript.trim().length > 0 && (
+                <button
+                  onClick={() => {
+                    const base = activeVersion?.extractedText || doc.ocrText || '';
+                    const combined = base ? `${base}\n\n--- LIVE SPEECH RECOGNITION ADDENDUM ---\n${liveTranscript}` : liveTranscript;
+                    handleSaveTranscript(combined);
+                    toggleBrowserSpeechRecognition();
+                  }}
+                  className="px-2.5 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-[11px] font-medium cursor-pointer shadow-2xs"
+                >
+                  Append to Exhibit
+                </button>
+              )}
+            </div>
+            {liveTranscript.trim().length > 0 ? (
+              <div className="font-mono text-[11px] bg-white p-2 rounded border border-rose-200 text-slate-800 max-h-32 overflow-y-auto whitespace-pre-wrap">
+                {liveTranscript}
+              </div>
+            ) : (
+              <div className="text-[11px] text-rose-600 italic">
+                Awaiting speech... Speak or play audio to generate live verbatim text.
+              </div>
+            )}
+          </div>
+        )}
+
+        {isEditingTranscript ? (
+          <div className="p-3 space-y-2">
+            <div className="text-[11px] text-slate-500">
+              Modify speaker designations, timestamps, or spoken dialogue. Changes are cryptographically sealed.
+            </div>
+            <textarea
+              value={editedTranscriptText}
+              onChange={(e) => setEditedTranscriptText(e.target.value)}
+              rows={10}
+              className="w-full font-mono text-xs p-3 rounded border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-slate-900 bg-slate-50"
+            />
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => setIsEditingTranscript(false)}
+                className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded border border-slate-300 font-medium cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleSaveTranscript(editedTranscriptText)}
+                className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded font-medium flex items-center space-x-1 cursor-pointer shadow-2xs"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Save & Certify Transcript</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-3 max-h-[360px] overflow-y-auto space-y-2 divide-y divide-slate-100">
+            {segments.length === 0 ? (
+              <div className="py-6 text-center space-y-2 text-slate-500">
+                <p className="text-xs">No formatted dialogue segments currently recorded.</p>
+                <button
+                  onClick={handleAiRetranscribe}
+                  disabled={isTranscribing}
+                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium transition cursor-pointer shadow-2xs"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Generate High-Accuracy Transcript</span>
+                </button>
+              </div>
+            ) : (
+              segments.map((seg, idx) => {
+                const isCurrent =
+                  currentPlaybackTime >= seg.startSec &&
+                  (idx === segments.length - 1 || currentPlaybackTime < segments[idx + 1].startSec);
+
+                return (
+                  <div
+                    key={idx}
+                    className={`pt-2 flex items-start space-x-3 transition-colors rounded p-1.5 ${
+                      isCurrent ? 'bg-blue-50/80 border border-blue-200' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <button
+                      onClick={() => handleSeekToTime(seg.time)}
+                      className={`font-mono text-[11px] px-2 py-0.5 rounded font-semibold shrink-0 cursor-pointer flex items-center space-x-1 transition shadow-2xs ${
+                        isCurrent
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-slate-100 hover:bg-blue-100 text-blue-700 border border-slate-200'
+                      }`}
+                      title="Click to seek playback to this timestamp"
+                    >
+                      <Play className="w-2.5 h-2.5 fill-current" />
+                      <span>{seg.time}</span>
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[11px] font-bold text-slate-700 mr-2">{seg.speaker}:</span>
+                      <span className="text-xs text-slate-900 leading-relaxed select-text">{seg.text}</span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   // Modals
@@ -425,13 +804,15 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                   </div>
                 </div>
               ) : activeVersion && ['mp4', 'mkv', 'avi', 'mov', 'webm', 'wmv'].includes(activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '') ? (
-                <div className="flex flex-col items-center justify-center p-3 space-y-3">
+                <div className="flex flex-col items-center justify-center p-3 space-y-3 w-full">
                   <div className="w-full bg-slate-950 rounded-lg overflow-hidden shadow-lg border border-slate-700 relative">
                     <video
+                      ref={mediaRef as any}
                       src={blobUrl || undefined}
                       controls
-                      className="w-full max-h-[500px] bg-black mx-auto"
+                      className="w-full max-h-[460px] bg-black mx-auto"
                       playsInline
+                      onTimeUpdate={(e) => setCurrentPlaybackTime(e.currentTarget.currentTime)}
                     />
                     <div className="absolute top-2 left-2 bg-black/75 text-emerald-400 font-mono text-[10px] px-2 py-0.5 rounded backdrop-blur-xs border border-emerald-500/40 flex items-center space-x-1">
                       <ShieldCheck className="w-3 h-3 text-emerald-400" />
@@ -445,9 +826,10 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                     </span>
                     <span>{(Number(activeVersion.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB</span>
                   </div>
+                  {renderInteractiveTranscript(true)}
                 </div>
               ) : activeVersion && ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'wma'].includes(activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '') ? (
-                <div className="flex flex-col items-center justify-center py-12 px-6 space-y-4 max-w-lg mx-auto bg-slate-50 rounded-xl border border-slate-200 shadow-xs">
+                <div className="flex flex-col items-center justify-center py-6 px-4 space-y-4 w-full max-w-2xl mx-auto bg-slate-50 rounded-xl border border-slate-200 shadow-xs">
                   <div className="p-4 rounded-full bg-blue-100 text-blue-700 shadow-inner">
                     <Volume2 className="w-10 h-10" />
                   </div>
@@ -457,11 +839,18 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                       Acoustic Audio Exhibit • {(Number(activeVersion.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB
                     </p>
                   </div>
-                  <audio src={blobUrl || undefined} controls className="w-full" />
+                  <audio
+                    ref={mediaRef as any}
+                    src={blobUrl || undefined}
+                    controls
+                    className="w-full"
+                    onTimeUpdate={(e) => setCurrentPlaybackTime(e.currentTarget.currentTime)}
+                  />
                   <div className="text-[10px] text-emerald-800 font-mono bg-emerald-50 px-3 py-1 rounded border border-emerald-200 flex items-center space-x-1">
                     <ShieldCheck className="w-3 h-3 text-emerald-600" />
                     <span>Section 65B Authenticated Audio Bitstream</span>
                   </div>
+                  {renderInteractiveTranscript(false)}
                 </div>
               ) : activeVersion?.originalFileName.toLowerCase().endsWith('.pdf') ? (
                 <div className="w-full h-full min-h-[560px] flex flex-col">

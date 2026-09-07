@@ -19,6 +19,8 @@ router.post(
 );
 router.put('/:id/classification', requireDocumentAccess('WRITE'), DocumentController.updateClassification);
 router.put('/:id/metadata', requireDocumentAccess('WRITE'), DocumentController.updateMetadata);
+router.put('/:id/transcript', requireDocumentAccess('WRITE'), DocumentController.updateTranscript);
+router.post('/:id/transcribe', requireDocumentAccess('WRITE'), DocumentController.retranscribe);
 router.post('/:id/retry-processing', requireDocumentAccess('WRITE'), DocumentController.retryProcessing);
 router.post('/:id/verify', requireDocumentAccess('READ'), DocumentController.verifyIntegrity);
 router.post('/:id/verify-integrity', requireDocumentAccess('READ'), DocumentController.verifyIntegrity);

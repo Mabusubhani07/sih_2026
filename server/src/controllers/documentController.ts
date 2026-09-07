@@ -9,6 +9,7 @@ import { DocumentIngestionService } from '../services/documentIngestionService';
 import { FileValidationService } from '../services/fileValidationService';
 import { TextExtractionService } from '../services/textExtractionService';
 import { MetadataExtractionService } from '../services/metadataExtractionService';
+import { TranscriptionService } from '../services/transcriptionService';
 import { AUDIT_ACTIONS, DOCUMENT_STATUS, DOCUMENT_TYPES, ROLES } from '../config/constants';
 
 export class DocumentController {
@@ -1127,6 +1128,178 @@ export class DocumentController {
       });
     } catch (err: any) {
       return res.status(500).json({ error: 'Failed to retrieve OCR text.' });
+    }
+  }
+
+  /**
+   * On-demand high-accuracy audio or video transcription / re-transcription
+   */
+  static async retranscribe(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const { version } = req.query;
+      const user = req.user!;
+
+      const doc = await prisma.document.findUnique({
+        where: { id },
+        include: { versions: { orderBy: { versionNumber: 'desc' } } },
+      });
+
+      if (!doc) {
+        return res.status(404).json({ error: 'Document not found.' });
+      }
+
+      const targetVer = version ? parseInt(String(version), 10) : doc.currentVersionNumber;
+      const verRecord = doc.versions.find((v) => v.versionNumber === targetVer);
+
+      if (!verRecord) {
+        return res.status(404).json({ error: `Version v${targetVer} not found.` });
+      }
+
+      const fileBuffer = await storageService.getFileBuffer(verRecord.storagePath);
+      const ext = (verRecord.originalFileName.split('.').pop() || '').toLowerCase();
+      const mime = (verRecord.mimeType || '').toLowerCase();
+
+      let result;
+      if (['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'wma'].includes(ext) || mime.startsWith('audio/')) {
+        result = await TranscriptionService.transcribeAudio(fileBuffer, verRecord.originalFileName, verRecord.mimeType, ext);
+      } else if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'wmv'].includes(ext) || mime.startsWith('video/')) {
+        result = await TranscriptionService.transcribeVideo(fileBuffer, verRecord.originalFileName, verRecord.mimeType, ext);
+      } else {
+        return res.status(400).json({ error: 'Transcription is only applicable to audio or video exhibits.' });
+      }
+
+      // Update version and document records
+      await prisma.$transaction([
+        prisma.documentVersion.update({
+          where: {
+            documentId_versionNumber: {
+              documentId: doc.id,
+              versionNumber: targetVer,
+            },
+          },
+          data: {
+            extractedText: result.transcriptText,
+          },
+        }),
+        prisma.document.update({
+          where: { id: doc.id },
+          data: {
+            ocrText: result.transcriptText,
+            isOcrProcessed: true,
+            processingStatus: 'READY',
+          },
+        }),
+      ]);
+
+      await AuditService.log({
+        userId: user.id,
+        userRole: user.role,
+        action: 'TRANSCRIPT_GENERATED',
+        caseId: doc.caseId,
+        documentId: doc.id,
+        status: 'SUCCESS',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        details: {
+          documentNumber: doc.documentNumber,
+          versionNumber: targetVer,
+          method: result.method,
+          confidence: result.confidence,
+          durationSec: result.durationSec,
+        },
+      });
+
+      return res.json({
+        message: 'High-accuracy transcript generated and secured in document repository.',
+        transcriptText: result.transcriptText,
+        segments: result.segments,
+        method: result.method,
+        confidence: result.confidence,
+        durationSec: result.durationSec,
+        metadataSummary: result.metadataSummary,
+      });
+    } catch (err: any) {
+      console.error('retranscribe error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to generate transcript.' });
+    }
+  }
+
+  /**
+   * Updates or corrects exhibit transcript (e.g. from browser speech recognition or investigator review)
+   */
+  static async updateTranscript(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const { transcriptText, versionNumber } = req.body;
+      const user = req.user!;
+
+      if (!transcriptText || typeof transcriptText !== 'string' || transcriptText.trim().length === 0) {
+        return res.status(400).json({ error: 'Valid transcript text is required.' });
+      }
+
+      const doc = await prisma.document.findUnique({
+        where: { id },
+        include: { versions: { orderBy: { versionNumber: 'desc' } } },
+      });
+
+      if (!doc) {
+        return res.status(404).json({ error: 'Document not found.' });
+      }
+
+      const targetVer = versionNumber ? parseInt(String(versionNumber), 10) : doc.currentVersionNumber;
+      const verRecord = doc.versions.find((v) => v.versionNumber === targetVer);
+
+      if (!verRecord) {
+        return res.status(404).json({ error: `Version v${targetVer} not found.` });
+      }
+
+      await prisma.$transaction([
+        prisma.documentVersion.update({
+          where: {
+            documentId_versionNumber: {
+              documentId: doc.id,
+              versionNumber: targetVer,
+            },
+          },
+          data: {
+            extractedText: transcriptText.trim(),
+          },
+        }),
+        prisma.document.update({
+          where: { id: doc.id },
+          data: {
+            ocrText: transcriptText.trim(),
+            isOcrProcessed: true,
+          },
+        }),
+      ]);
+
+      await AuditService.log({
+        userId: user.id,
+        userRole: user.role,
+        action: 'TRANSCRIPT_UPDATED',
+        caseId: doc.caseId,
+        documentId: doc.id,
+        status: 'SUCCESS',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        details: {
+          documentNumber: doc.documentNumber,
+          versionNumber: targetVer,
+          updatedBy: user.name,
+          charactersCount: transcriptText.trim().length,
+        },
+      });
+
+      return res.json({
+        message: 'Exhibit transcript updated and sealed successfully.',
+        ocrText: transcriptText.trim(),
+        versionNumber: targetVer,
+      });
+    } catch (err: any) {
+      console.error('updateTranscript error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to update transcript.' });
     }
   }
 }

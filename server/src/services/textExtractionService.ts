@@ -1,4 +1,5 @@
 import { OCRService } from './ocrService';
+import { TranscriptionService } from './transcriptionService';
 
 export interface ExtractionResult {
   text: string;
@@ -104,7 +105,7 @@ export class TextExtractionService {
       ext === 'wmv' ||
       mime.startsWith('video/')
     ) {
-      return this.extractFromVideo(buffer, fileName, mimeType, ext);
+      return await this.extractFromVideo(buffer, fileName, mimeType, ext);
     }
 
     // 6. Audio Evidence (.mp3, .wav, .m4a, .ogg, .aac, .flac, .wma)
@@ -118,7 +119,7 @@ export class TextExtractionService {
       ext === 'wma' ||
       mime.startsWith('audio/')
     ) {
-      return this.extractFromAudio(buffer, fileName, mimeType, ext);
+      return await this.extractFromAudio(buffer, fileName, mimeType, ext);
     }
 
     // Unsupported format
@@ -650,148 +651,43 @@ export class TextExtractionService {
 
   /**
    * Video Evidence Extraction:
-   * Container and atom parsing (MP4, MKV, AVI, MOV, WEBM)
-   * Generates time-coded forensic surveillance observation transcript + Section 65B certificate.
+   * Uses TranscriptionService for high-accuracy multimodal AI STT or chronological surveillance log.
    */
-  private static extractFromVideo(
+  private static async extractFromVideo(
     buffer: Buffer,
     fileName: string,
     mimeType: string,
     ext: string
-  ): ExtractionResult {
-    const sizeMb = (buffer.length / (1024 * 1024)).toFixed(2);
-    const formatUpper = ext.toUpperCase();
-
-    // Parse video container metadata
-    let durationSec = 0;
-    let timescale = 1000;
-    let width = 1920;
-    let height = 1080;
-    let brand = 'Standard ISO/MPEG-4';
-
-    if (ext === 'mp4' || ext === 'mov') {
-      const mp4Info = this.parseMp4Atoms(buffer);
-      if (mp4Info.brand) brand = mp4Info.brand;
-      if (mp4Info.durationSec > 0) durationSec = mp4Info.durationSec;
-      if (mp4Info.width > 0) width = mp4Info.width;
-      if (mp4Info.height > 0) height = mp4Info.height;
-    } else if (ext === 'avi') {
-      const aviInfo = this.parseAviHeader(buffer);
-      if (aviInfo.durationSec > 0) durationSec = aviInfo.durationSec;
-      if (aviInfo.width > 0) width = aviInfo.width;
-      if (aviInfo.height > 0) height = aviInfo.height;
-    }
-
-    const durationDisplay = this.formatDuration(durationSec);
-
-    const text = [
-      `=== FORENSIC VIDEO SURVEILLANCE & MULTIMEDIA TRANSCRIPT ===`,
-      `Exhibit Name: ${fileName}`,
-      `Container Format: ${formatUpper} (${mimeType})`,
-      `Codec Profile / Brand: ${brand}`,
-      `Display Resolution: ${width > 0 ? `${width} x ${height} px` : '1920 x 1080 (1080p FHD)'}`,
-      `Calculated Stream Duration: ${durationDisplay} (${durationSec.toFixed(2)} seconds)`,
-      `Bitstream Payload Size: ${sizeMb} MB (${buffer.length} bytes)`,
-      `Statutory Compliance: Certified under Section 65B(4) Indian Evidence Act`,
-      `Cryptographic Seal: SHA-256 Bitstream Hash Certified in Case Ledger`,
-      ``,
-      `--- CHRONOLOGICAL FORENSIC SURVEILLANCE LOG ---`,
-      `[00:00:00.000] Surveillance recording stream initiated. Video clock synchronization locked.`,
-      `[00:00:05.000] Primary visual observation active. Frame sequence continuous; zero dropped packets.`,
-      `[00:00:15.000] Optical telemetry stable. Environmental illumination and focal depth consistent.`,
-      `[00:00:30.000] Mid-stream continuity checkpoint. Timestamp verified with zero signal interruptions.`,
-      `[End of Stream] Playback stream concluded at ${durationDisplay}. Zero tampering or stream truncations detected.`,
-      ``,
-      `--- SECTION 65B EVIDENTIARY DECLARATION ---`,
-      `I hereby certify that the digital video recording exhibit identified above was captured, ingested, and processed in the regular course of official forensic operations. The bitstream integrity has been preserved continuously under strict chain-of-custody protocols without unauthorized alteration or editing.`,
-    ].join('\n');
-
-    console.log(`[OCR] Video surveillance transcript generated for "${fileName}" (${sizeMb} MB, ${durationDisplay})`);
-
+  ): Promise<ExtractionResult> {
+    const result = await TranscriptionService.transcribeVideo(buffer, fileName, mimeType, ext);
     return {
-      text,
+      text: result.transcriptText,
       isOcr: false,
       pageCount: 1,
-      confidence: 1.0,
+      confidence: result.confidence,
       method: 'NATIVE_TEXT',
-      language: 'en',
+      language: result.language || 'en',
     };
   }
 
   /**
    * Audio Evidence Extraction:
-   * Binary header analysis (WAV RIFF, MP3 ID3, M4A, FLAC, OGG)
-   * Generates time-coded forensic acoustic inspection transcript + Section 65B certificate.
+   * Uses TranscriptionService for high-accuracy Cloud AI STT or deep acoustic VAD analysis.
    */
-  private static extractFromAudio(
+  private static async extractFromAudio(
     buffer: Buffer,
     fileName: string,
     mimeType: string,
     ext: string
-  ): ExtractionResult {
-    const sizeMb = (buffer.length / (1024 * 1024)).toFixed(2);
-    const formatUpper = ext.toUpperCase();
-
-    // Parse audio acoustic characteristics
-    let channels = 1;
-    let sampleRate = 44100;
-    let bitsPerSample = 16;
-    let durationSec = 0;
-    let audioFormatName = 'Uncompressed Linear PCM';
-
-    if (ext === 'wav') {
-      const wav = this.parseWavHeader(buffer);
-      if (wav) {
-        channels = wav.channels;
-        sampleRate = wav.sampleRate;
-        bitsPerSample = wav.bitsPerSample;
-        durationSec = wav.duration;
-        audioFormatName = wav.format === 1 ? 'PCM Audio (RIFF/WAV)' : `Format Tag 0x${wav.format.toString(16)}`;
-      }
-    } else if (ext === 'mp3') {
-      const mp3 = this.parseMp3Header(buffer);
-      if (mp3) {
-        channels = mp3.channels;
-        sampleRate = mp3.sampleRate;
-        durationSec = mp3.durationSec;
-        audioFormatName = 'MPEG Audio Layer III (MP3)';
-      }
-    }
-
-    const durationDisplay = this.formatDuration(durationSec);
-
-    const text = [
-      `=== FORENSIC AUDIO RECORDING TRANSCRIPT & SPECTRAL AUDIT ===`,
-      `Exhibit Name: ${fileName}`,
-      `Acoustic Container: ${formatUpper} (${mimeType})`,
-      `Audio Encoding: ${audioFormatName}`,
-      `Channel Configuration: ${channels === 2 ? 'Stereo (2 Channels)' : 'Mono (1 Channel)'}`,
-      `Sampling Frequency: ${sampleRate.toLocaleString()} Hz`,
-      `Quantization Bit Depth: ${bitsPerSample}-bit`,
-      `Calculated Playback Duration: ${durationDisplay} (${durationSec.toFixed(2)} seconds)`,
-      `Bitstream Payload Size: ${sizeMb} MB (${buffer.length} bytes)`,
-      `Statutory Compliance: Certified under Section 65B(4) Indian Evidence Act`,
-      `Cryptographic Seal: SHA-256 Bitstream Hash Certified in Case Ledger`,
-      ``,
-      `--- CHRONOLOGICAL FORENSIC ACOUSTIC LOG ---`,
-      `[00:00:00.000] Acoustic session initiation. Noise floor calibration: Normal. High-pass filter stable.`,
-      `[00:00:05.000] Primary audio waveform established; speech/signal telemetry active. Dynamic range consistent.`,
-      `[00:00:15.000] Signal continuity check: Zero spectral discontinuity, dropouts, or splicing artifacts.`,
-      `[End of Audio Stream] Session playback concluded at ${durationDisplay}. Cryptographic bitstream fully preserved.`,
-      ``,
-      `--- SECTION 65B EVIDENTIARY DECLARATION ---`,
-      `I hereby certify that the electronic sound recording identified above was captured, stored, and extracted pursuant to standard forensic operating procedures without tampering, editing, or unauthorized modification.`,
-    ].join('\n');
-
-    console.log(`[OCR] Audio acoustic transcript generated for "${fileName}" (${sizeMb} MB, ${durationDisplay})`);
-
+  ): Promise<ExtractionResult> {
+    const result = await TranscriptionService.transcribeAudio(buffer, fileName, mimeType, ext);
     return {
-      text,
+      text: result.transcriptText,
       isOcr: false,
       pageCount: 1,
-      confidence: 1.0,
+      confidence: result.confidence,
       method: 'NATIVE_TEXT',
-      language: 'en',
+      language: result.language || 'en',
     };
   }
 
