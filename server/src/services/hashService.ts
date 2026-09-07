@@ -9,6 +9,8 @@ export interface IntegrityVerificationResult {
   calculatedHash: string;
   checkedAt: string;
   fileSizeBytes: number;
+  reason?: string;
+  error?: string;
 }
 
 export class HashService {
@@ -64,24 +66,46 @@ export class HashService {
 
   /**
    * Authoritative backend verification of stored file integrity against recorded master hash.
-   * Reads actual disk bytes, recalculates SHA-256, and executes constant-time comparison.
+   * Reads actual disk/database bytes, recalculates SHA-256, and executes constant-time comparison.
+   * If physical file bytes are missing or corrupted, authoritatively reports INTEGRITY_FAILED
+   * with complete custody documentation without throwing unhandled server errors.
    */
   static async verifyFileIntegrity(
     storagePath: string,
     recordedHash: string
   ): Promise<IntegrityVerificationResult> {
-    const fileBuffer = await storageService.getFileBuffer(storagePath);
-    const calculatedHash = this.calculateSHA256(fileBuffer);
-    const verified = this.verifyHashConstantTime(calculatedHash, recordedHash);
+    const normalizedRecorded = (recordedHash || '').trim().toLowerCase();
 
-    return {
-      verified,
-      status: verified ? 'INTEGRITY_VERIFIED' : 'INTEGRITY_FAILED',
-      algorithm: 'SHA-256',
-      recordedHash: (recordedHash || '').trim().toLowerCase(),
-      calculatedHash,
-      checkedAt: new Date().toISOString(),
-      fileSizeBytes: fileBuffer.length,
-    };
+    try {
+      const fileBuffer = await storageService.getFileBuffer(storagePath);
+      const calculatedHash = this.calculateSHA256(fileBuffer);
+      const verified = this.verifyHashConstantTime(calculatedHash, normalizedRecorded);
+
+      return {
+        verified,
+        status: verified ? 'INTEGRITY_VERIFIED' : 'INTEGRITY_FAILED',
+        algorithm: 'SHA-256',
+        recordedHash: normalizedRecorded,
+        calculatedHash,
+        checkedAt: new Date().toISOString(),
+        fileSizeBytes: fileBuffer.length,
+        reason: verified
+          ? 'Bitstream SHA-256 hash matches immutable master record exactly.'
+          : 'Bitstream mismatch detected! The stored artifact differs from the recorded master seal (Tampering detected).',
+      };
+    } catch (err: any) {
+      console.warn(`[HashService] Physical file retrieval failed for integrity check on "${storagePath}":`, err.message);
+      return {
+        verified: false,
+        status: 'INTEGRITY_FAILED',
+        algorithm: 'SHA-256',
+        recordedHash: normalizedRecorded,
+        calculatedHash: 'UNAVAILABLE (File artifact missing from storage vault)',
+        checkedAt: new Date().toISOString(),
+        fileSizeBytes: 0,
+        reason: 'Physical file artifact cannot be retrieved from storage repository. Bitstream integrity cannot be certified.',
+        error: err.message || 'File artifact not found in storage vault.',
+      };
+    }
   }
 }

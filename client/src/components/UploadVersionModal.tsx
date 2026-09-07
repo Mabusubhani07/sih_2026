@@ -123,9 +123,9 @@ export const UploadVersionModal: React.FC<Props> = ({ document, onClose, onVersi
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-semibold shadow-xs"
+              className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-semibold shadow-xs transition disabled:opacity-50"
             >
-              {isSubmitting ? 'Uploading...' : `Upload Version v${nextVerNumber}`}
+              {isSubmitting ? 'Sealing Revision & Computing Hash...' : `Upload Version v${nextVerNumber}`}
             </button>
           </div>
         </form>

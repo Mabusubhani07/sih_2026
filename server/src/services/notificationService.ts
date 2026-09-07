@@ -49,14 +49,16 @@ export class NotificationService {
         recipientUserIds.delete(excludeUserId);
       }
 
-      for (const userId of recipientUserIds) {
-        await this.sendNotification({
-          userId,
-          title,
-          message,
-          type,
-          link: link || `/cases/${caseId}`,
-        });
+      const notifications = Array.from(recipientUserIds).map((userId) => ({
+        userId,
+        title,
+        message,
+        type,
+        link: link || `/cases/${caseId}`,
+      }));
+
+      if (notifications.length > 0) {
+        await prisma.notification.createMany({ data: notifications });
       }
     } catch (err) {
       console.error('[NotificationService] Failed to notify case members:', err);

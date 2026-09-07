@@ -81,43 +81,114 @@ class LocalStorageService implements IStorageService {
   }
 
   async getFileBuffer(storagePath: string): Promise<Buffer> {
-    // 1. Check local base directory
-    const filePath = this.getAbsolutePath(storagePath);
-    if (fs.existsSync(filePath)) {
-      return fs.promises.readFile(filePath);
+    if (!storagePath || typeof storagePath !== 'string') {
+      throw new Error('Invalid storage path provided for retrieval.');
     }
 
-    // 2. Check alternative relative paths (e.g. ./uploads, server/uploads, /tmp/uploads)
-    const altPaths = [
-      path.resolve('./uploads', storagePath),
-      path.resolve('../uploads', storagePath),
-      path.resolve(process.cwd(), 'uploads', storagePath),
-      path.resolve(process.cwd(), 'server', 'uploads', storagePath),
-      path.resolve('/tmp/uploads', storagePath),
+    let decodedPath = storagePath;
+    try {
+      decodedPath = decodeURIComponent(storagePath);
+    } catch {
+      // keep raw
+    }
+
+    const normalizedPath = decodedPath.replace(/\\/g, '/');
+    const cleanPath = normalizedPath.replace(/^\/+/, '');
+    const basename = path.basename(normalizedPath);
+
+    // 1. Check local base directory and alternative file system locations
+    const localCandidates = [
+      this.getAbsolutePath(storagePath),
+      this.getAbsolutePath(cleanPath),
+      this.getAbsolutePath(basename),
+      path.resolve('./uploads', basename),
+      path.resolve('../uploads', basename),
+      path.resolve(process.cwd(), 'uploads', basename),
+      path.resolve(process.cwd(), 'server', 'uploads', basename),
+      path.resolve('/tmp/uploads', basename),
+      path.resolve('/tmp/uploads', cleanPath),
     ];
-    for (const alt of altPaths) {
-      if (fs.existsSync(alt)) {
-        return fs.promises.readFile(alt);
+
+    for (const cand of localCandidates) {
+      if (fs.existsSync(cand)) {
+        try {
+          const stat = fs.statSync(cand);
+          if (stat.isFile()) {
+            return await fs.promises.readFile(cand);
+          }
+        } catch {
+          // continue checking other candidates
+        }
       }
     }
 
-    // 3. Fallback to PostgreSQL StoredFile table (essential for Vercel Serverless / multi-instance deploys)
+    // 2. Fallback to PostgreSQL StoredFile table (multi-strategy database retrieval)
     try {
-      const stored = await prisma.storedFile.findUnique({
-        where: { storagePath },
+      const stored = await prisma.storedFile.findFirst({
+        where: {
+          OR: [
+            { storagePath: storagePath },
+            { storagePath: cleanPath },
+            { storagePath: basename },
+            { storagePath: `uploads/${basename}` },
+            { storagePath: { endsWith: basename } },
+            { fileName: basename },
+          ],
+        },
       });
+
       if (stored && stored.data) {
         const buffer = Buffer.from(stored.data);
-        // Cache to local directory for subsequent reads in this invocation
+        // Cache to local directory for subsequent fast reads within this invocation
         try {
           if (!fs.existsSync(this.baseDir)) {
             fs.mkdirSync(this.baseDir, { recursive: true });
           }
-          await fs.promises.writeFile(filePath, buffer);
-        } catch (cacheErr) {
-          // ignore cache write error
+          const targetCachePath = path.join(this.baseDir, basename);
+          await fs.promises.writeFile(targetCachePath, buffer);
+        } catch {
+          // ignore cache write error on read-only environments
         }
         return buffer;
+      }
+
+      // 3. Fallback: Lookup DocumentVersion to find matching file reference
+      const docVer = await prisma.documentVersion.findFirst({
+        where: {
+          OR: [
+            { storagePath: storagePath },
+            { storagePath: cleanPath },
+            { storagePath: basename },
+            { fileName: basename },
+            { originalFileName: basename },
+          ],
+        },
+      });
+
+      if (docVer) {
+        const matched = await prisma.storedFile.findFirst({
+          where: {
+            OR: [
+              { storagePath: docVer.storagePath },
+              { storagePath: { contains: path.basename(docVer.storagePath.replace(/\\/g, '/')) } },
+              { fileName: docVer.fileName },
+              { fileName: docVer.originalFileName },
+            ],
+          },
+        });
+
+        if (matched && matched.data) {
+          const buffer = Buffer.from(matched.data);
+          try {
+            if (!fs.existsSync(this.baseDir)) {
+              fs.mkdirSync(this.baseDir, { recursive: true });
+            }
+            await fs.promises.writeFile(path.join(this.baseDir, basename), buffer);
+          } catch {
+            // ignore
+          }
+          return buffer;
+        }
       }
     } catch (dbErr) {
       console.warn(`[Storage] Database file retrieval error for "${storagePath}":`, dbErr);

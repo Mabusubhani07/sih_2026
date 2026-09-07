@@ -151,7 +151,16 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
       setIntegrityStatus(result.verified ? 'VERIFIED' : 'FAILED');
     } catch (err: any) {
       setIntegrityStatus('FAILED');
-      alert(err.message || 'Integrity verification failed to complete.');
+      setVerificationDetails({
+        verified: false,
+        status: 'INTEGRITY_FAILED',
+        reason: err.message || 'Integrity verification failed to complete.',
+        recordedHash: activeVersion.sha256Hash || 'UNKNOWN',
+        calculatedHash: 'UNAVAILABLE',
+        checkedAt: new Date().toISOString(),
+        fileSizeBytes: 0,
+        algorithm: 'SHA-256',
+      } as any);
     } finally {
       setIsVerifyingIntegrity(false);
     }
@@ -659,8 +668,14 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                       <div>
                         <div className="font-bold">✕ Integrity Verification Failed</div>
                         <div className="text-[10px] text-red-700 mt-0.5">
-                          Bitstream mismatch detected! The stored artifact may have been modified outside official channels.
+                          {(verificationDetails as any)?.reason ||
+                            'Bitstream mismatch detected! The stored artifact may have been modified outside official channels.'}
                         </div>
+                        {(verificationDetails as any)?.calculatedHash && (
+                          <div className="text-[9px] font-mono text-red-900 mt-1 break-all bg-red-100/60 p-1 rounded">
+                            Calculated: {(verificationDetails as any).calculatedHash}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

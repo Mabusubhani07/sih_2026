@@ -119,66 +119,26 @@ export class DocumentIngestionService {
       console.log(`[OCR] MIME type: ${validation.normalizedMimeType}`);
       console.log(`[OCR] File size: ${stored.fileSize} bytes`);
 
-      // Retrieve actual file bytes from storage abstraction
-      const storedBytes = await storageService.getFileBuffer(stored.storagePath);
-      console.log(`[OCR] Storage retrieval successful: ${stored.storagePath} (${storedBytes.length} bytes)`);
+      // Retrieve actual file bytes for extraction (use in-memory buffer directly to avoid redundant storage round-trips)
+      const payloadBytes = file.buffer;
+      console.log(`[OCR] Payload verified for extraction: ${file.originalname} (${payloadBytes.length} bytes)`);
 
-      // 7a. Text Extraction / Real OCR
-      await prisma.document.update({
-        where: { id: doc.id },
-        data: { processingStatus: 'PROCESSING' },
-      });
-
+      // 7a. Text Extraction / Expedited OCR
       console.log(`[OCR] OCR / Extraction started for ${doc.documentNumber}`);
       const extraction = await TextExtractionService.extractText(
-        storedBytes,
+        payloadBytes,
         file.originalname,
         validation.normalizedMimeType
       );
 
-      console.log(`[OCR] Extraction method: ${extraction.method}`);
-      console.log(`[OCR] Page count: ${extraction.pageCount}`);
-      console.log(`[OCR] OCR completed`);
-      console.log(`[OCR] Extracted character count: ${extraction.text.length}`);
-
-      await prisma.document.update({
-        where: { id: doc.id },
-        data: {
-          ocrText: extraction.text,
-          isOcrProcessed: extraction.isOcr,
-          processingStatus: 'OCR_COMPLETE',
-        },
-      });
-
-      await prisma.documentVersion.update({
-        where: {
-          documentId_versionNumber: {
-            documentId: doc.id,
-            versionNumber: 1,
-          },
-        },
-        data: {
-          extractedText: extraction.text,
-        },
-      });
-      console.log(`[OCR] Database save successful`);
+      console.log(`[OCR] Extraction method: ${extraction.method}, page count: ${extraction.pageCount}, chars: ${extraction.text.length}`);
 
       // 7b. Classification
       const classification = ClassificationService.classify(file.originalname, extraction.text);
       const finalType = documentType && documentType !== 'AUTO' ? documentType : classification.documentType;
       const finalSub = subCategory || classification.subCategory;
 
-      await prisma.document.update({
-        where: { id: doc.id },
-        data: {
-          documentType: finalType,
-          subCategory: finalSub,
-          classificationReason: classification.rationale,
-          processingStatus: 'CLASSIFIED',
-        },
-      });
-
-      // 7c. Metadata Extraction & Persistence
+      // 7c. Metadata Extraction
       const metadata = MetadataExtractionService.extract(
         extraction.text,
         file.originalname,
@@ -186,51 +146,68 @@ export class DocumentIngestionService {
         caseRecord?.firNumber
       );
 
-      await prisma.documentMetadata.upsert({
-        where: { documentId: doc.id },
-        update: {
-          caseNumber: metadata.caseNumber,
-          firNumber: metadata.firNumber,
-          referenceNumber: metadata.referenceNumber,
-          documentDate: metadata.documentDate,
-          issuingAuthority: metadata.issuingAuthority,
-          departmentName: metadata.departmentName,
-          location: metadata.location,
-          language: metadata.language,
-          entities: JSON.stringify(metadata.entities),
-          keywords: JSON.stringify(metadata.keywords),
-          categoryConfidence: metadata.categoryConfidence,
-        },
-        create: {
-          documentId: doc.id,
-          caseNumber: metadata.caseNumber,
-          firNumber: metadata.firNumber,
-          referenceNumber: metadata.referenceNumber,
-          documentDate: metadata.documentDate,
-          issuingAuthority: metadata.issuingAuthority,
-          departmentName: metadata.departmentName,
-          location: metadata.location,
-          language: metadata.language,
-          entities: JSON.stringify(metadata.entities),
-          keywords: JSON.stringify(metadata.keywords),
-          categoryConfidence: metadata.categoryConfidence,
-        },
-      });
-
-      // 7d. Indexing & Completion -> State: READY
-      const finalizedDoc = await prisma.document.update({
-        where: { id: doc.id },
-        data: {
-          processingStatus: 'READY',
-          processingError: null,
-        },
-        include: {
-          versions: true,
-          metadata: true,
-          createdBy: { select: { id: true, name: true, badgeNumber: true, role: true } },
-          department: true,
-        },
-      });
+      // 7d. Atomic Persistence & State Finalization -> State: READY
+      const [finalizedDoc] = await prisma.$transaction([
+        prisma.document.update({
+          where: { id: doc.id },
+          data: {
+            ocrText: extraction.text,
+            isOcrProcessed: extraction.isOcr,
+            documentType: finalType,
+            subCategory: finalSub,
+            classificationReason: classification.rationale,
+            processingStatus: 'READY',
+            processingError: null,
+          },
+          include: {
+            versions: true,
+            metadata: true,
+            createdBy: { select: { id: true, name: true, badgeNumber: true, role: true } },
+            department: true,
+          },
+        }),
+        prisma.documentVersion.update({
+          where: {
+            documentId_versionNumber: {
+              documentId: doc.id,
+              versionNumber: 1,
+            },
+          },
+          data: {
+            extractedText: extraction.text,
+          },
+        }),
+        prisma.documentMetadata.upsert({
+          where: { documentId: doc.id },
+          update: {
+            caseNumber: metadata.caseNumber,
+            firNumber: metadata.firNumber,
+            referenceNumber: metadata.referenceNumber,
+            documentDate: metadata.documentDate,
+            issuingAuthority: metadata.issuingAuthority,
+            departmentName: metadata.departmentName,
+            location: metadata.location,
+            language: metadata.language,
+            entities: JSON.stringify(metadata.entities),
+            keywords: JSON.stringify(metadata.keywords),
+            categoryConfidence: metadata.categoryConfidence,
+          },
+          create: {
+            documentId: doc.id,
+            caseNumber: metadata.caseNumber,
+            firNumber: metadata.firNumber,
+            referenceNumber: metadata.referenceNumber,
+            documentDate: metadata.documentDate,
+            issuingAuthority: metadata.issuingAuthority,
+            departmentName: metadata.departmentName,
+            location: metadata.location,
+            language: metadata.language,
+            entities: JSON.stringify(metadata.entities),
+            keywords: JSON.stringify(metadata.keywords),
+            categoryConfidence: metadata.categoryConfidence,
+          },
+        }),
+      ]);
       console.log(`[OCR] Search indexing successful: Document ${doc.documentNumber} is READY`);
 
       // Step 8: Append-Only Immutable Audit Log

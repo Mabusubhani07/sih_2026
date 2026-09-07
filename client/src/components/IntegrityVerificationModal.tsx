@@ -21,7 +21,17 @@ export const IntegrityVerificationModal: React.FC<Props> = ({ document, onClose 
       const result = await api.documents.verifyIntegrity(document.id, selectedVersion, verRecord?.id);
       setVerificationResult(result);
     } catch (err: any) {
-      alert(err.message || 'Integrity check failed to execute.');
+      const verRecord = (document.versions || []).find((v) => v.versionNumber === selectedVersion);
+      setVerificationResult({
+        verified: false,
+        status: 'INTEGRITY_FAILED',
+        reason: err.message || 'Integrity check failed to execute.',
+        recordedHash: verRecord?.sha256Hash || 'UNKNOWN',
+        calculatedHash: 'UNAVAILABLE',
+        checkedAt: new Date().toISOString(),
+        fileSizeBytes: 0,
+        algorithm: 'SHA-256',
+      } as any);
     } finally {
       setIsVerifying(false);
     }
@@ -112,7 +122,7 @@ export const IntegrityVerificationModal: React.FC<Props> = ({ document, onClose 
                   <div className="text-[11px] mt-0.5">
                     {verificationResult.verified
                       ? 'The calculated SHA-256 bitstream hash matches the immutable master record exactly.'
-                      : 'Bitstream mismatch detected! The stored artifact may have been modified outside official channels.'}
+                      : (verificationResult as any).reason || 'Bitstream mismatch detected! The stored artifact may have been modified outside official channels.'}
                   </div>
                 </div>
               </div>

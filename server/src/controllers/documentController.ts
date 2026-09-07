@@ -63,15 +63,15 @@ export class DocumentController {
         userAgent: req.headers['user-agent'],
       });
 
-      // Notify case members
-      await NotificationService.notifyCaseMembers(
+      // Notify case members (non-blocking for fast upload response)
+      NotificationService.notifyCaseMembers(
         caseId,
         `Document Ingested: ${doc.documentNumber}`,
         `${doc.title} (${doc.documentType}) was processed and added to the case repository.`,
         'VERSION',
         user.id,
         `/cases/${caseId}?doc=${doc.id}`
-      );
+      ).catch((err) => console.warn('[Upload Notification Error]', err));
 
       return res.status(201).json(doc);
     } catch (err: any) {
@@ -135,16 +135,21 @@ export class DocumentController {
         validation.normalizedMimeType
       );
 
-      // Retrieve actual file bytes from storage abstraction
-      const storedBytes = await storageService.getFileBuffer(stored.storagePath);
-      console.log(`[OCR] Version upload: Storage retrieval successful for ${stored.storagePath} (${storedBytes.length} bytes)`);
-
-      // 4. Text Extraction & Real OCR
-      const extraction = await TextExtractionService.extractText(
-        storedBytes,
-        file.originalname,
-        validation.normalizedMimeType
-      );
+      // 4. Text Extraction & Expedited Ingestion (Fail-safe for serverless execution)
+      let extractedText = '';
+      let isOcr = false;
+      try {
+        const extraction = await TextExtractionService.extractText(
+          file.buffer,
+          file.originalname,
+          validation.normalizedMimeType
+        );
+        extractedText = extraction.text;
+        isOcr = extraction.isOcr;
+      } catch (extractErr: any) {
+        console.warn(`[Version Upload] Text extraction non-fatal notice for "${file.originalname}":`, extractErr.message);
+        extractedText = `=== DIGITAL EVIDENCE REVISION ===\nExhibit: ${file.originalname}\nVersion: v${nextVersionNumber}\nSize: ${(file.size / 1024).toFixed(1)} KB\nSHA-256: ${sha256Hash}`;
+      }
 
       // 5. Create new DocumentVersion record and update Document.currentVersionNumber
       const [newVersion, updatedDoc] = await prisma.$transaction([
@@ -160,7 +165,7 @@ export class DocumentController {
             sha256Hash,
             hashAlgorithm: 'SHA-256',
             changeSummary: changeSummary || `Updated to revision v${nextVersionNumber}.`,
-            extractedText: extraction.text,
+            extractedText,
             uploadedById: user.id,
           },
         }),
@@ -168,8 +173,8 @@ export class DocumentController {
           where: { id },
           data: {
             currentVersionNumber: nextVersionNumber,
-            ocrText: extraction.text,
-            isOcrProcessed: extraction.isOcr,
+            ocrText: extractedText,
+            isOcrProcessed: isOcr,
             processingStatus: 'READY',
           },
           include: {
@@ -182,7 +187,7 @@ export class DocumentController {
 
       // 6. Update metadata with latest version findings
       const metadata = MetadataExtractionService.extract(
-        extraction.text,
+        extractedText,
         file.originalname
       );
       await prisma.documentMetadata.upsert({
@@ -218,19 +223,19 @@ export class DocumentController {
           sha256: sha256Hash,
           fileName: file.originalname,
           changeSummary,
-          isOcr: extraction.isOcr,
+          isOcr,
         },
       });
 
-      // 8. Notify case members
-      await NotificationService.notifyCaseMembers(
+      // 8. Notify case members (non-blocking for fast upload response)
+      NotificationService.notifyCaseMembers(
         doc.caseId,
         `New Version v${nextVersionNumber}: ${doc.documentNumber}`,
         `Document revision v${nextVersionNumber} uploaded by ${user.name}.`,
         'VERSION',
         user.id,
         `/cases/${doc.caseId}?doc=${doc.id}`
-      );
+      ).catch((err) => console.warn('[Version Notification Error]', err));
 
       return res.status(201).json({
         document: updatedDoc,
@@ -348,7 +353,15 @@ export class DocumentController {
         return res.status(404).json({ error: `Version v${targetVersionNumber} not found.` });
       }
 
-      const fileBuffer = await storageService.getFileBuffer(versionRecord.storagePath);
+      let fileBuffer: Buffer;
+      try {
+        fileBuffer = await storageService.getFileBuffer(versionRecord.storagePath);
+      } catch (storageErr: any) {
+        return res.status(404).json({
+          error: 'The physical evidence payload is not currently available in the storage repository. Please upload a replacement revision.',
+          code: 'FILE_NOT_FOUND_IN_VAULT',
+        });
+      }
 
       // Audit Log
       await AuditService.log({
@@ -423,7 +436,7 @@ export class DocumentController {
         });
       }
 
-      // Live verification by calculating SHA-256 of actual stored disk bytes
+      // Live verification by calculating SHA-256 of actual stored disk/database bytes
       const verificationResult = await HashService.verifyFileIntegrity(
         versionRecord.storagePath,
         versionRecord.sha256Hash
@@ -452,6 +465,7 @@ export class DocumentController {
           recordedHash: verificationResult.recordedHash,
           calculatedHash: verificationResult.calculatedHash,
           fileSizeBytes: verificationResult.fileSizeBytes,
+          reason: verificationResult.reason,
           checkedAt: verificationResult.checkedAt,
         },
       });
@@ -465,6 +479,7 @@ export class DocumentController {
         calculatedHash: verificationResult.calculatedHash,
         checkedAt: verificationResult.checkedAt,
         fileSizeBytes: verificationResult.fileSizeBytes,
+        reason: verificationResult.reason,
         documentId: doc.id,
         documentNumber: doc.documentNumber,
         versionId: versionRecord.id,
@@ -473,7 +488,17 @@ export class DocumentController {
       });
     } catch (err: any) {
       console.error('verifyIntegrity error:', err);
-      return res.status(500).json({ error: err.message || 'Failed to complete cryptographic verification check.' });
+      return res.status(200).json({
+        verified: false,
+        status: 'INTEGRITY_FAILED',
+        integrityStatus: 'INTEGRITY_FAILED',
+        algorithm: 'SHA-256',
+        recordedHash: 'UNKNOWN',
+        calculatedHash: 'UNAVAILABLE',
+        reason: err.message || 'Cryptographic verification check failed.',
+        checkedAt: new Date().toISOString(),
+        fileSizeBytes: 0,
+      });
     }
   }
 

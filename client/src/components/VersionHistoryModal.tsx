@@ -25,11 +25,13 @@ export const VersionHistoryModal: React.FC<Props> = ({ document, onClose }) => {
     setVerifyingId(ver.id);
     try {
       const res = await api.documents.verifyIntegrity(document.id, ver.versionNumber, ver.id);
+      const isMissing = (res as any).calculatedHash === 'UNAVAILABLE' || ((res as any).reason && (res as any).reason.includes('missing'));
+      const failMsg = isMissing ? '✕ Missing from vault' : '✕ Tampered';
       setVerifyStatusMap((prev) => ({
         ...prev,
         [ver.id]: {
           verified: res.verified,
-          message: res.verified ? '✓ Authentic' : '✕ Tampered',
+          message: res.verified ? '✓ Authentic' : failMsg,
         },
       }));
     } catch (err: any) {
