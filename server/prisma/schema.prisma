@@ -246,3 +246,13 @@ model Notification {
 
   @@index([userId, isRead])
 }
+
+model StoredFile {
+  id          String   @id @default(uuid())
+  storagePath String   @unique
+  fileName    String
+  mimeType    String
+  fileSize    Int
+  data        Bytes
+  createdAt   DateTime @default(now())
+}

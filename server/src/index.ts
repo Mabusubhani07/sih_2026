@@ -17,6 +17,8 @@ import userRoutes from './routes/userRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import hierarchyRoutes from './routes/hierarchyRoutes';
 
+import { storageService } from './services/storageService';
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -31,6 +33,32 @@ const uploadsDir = path.resolve(process.env.LOCAL_STORAGE_DIR || defaultUploads)
 if (fs.existsSync(uploadsDir)) {
   app.use('/uploads', express.static(uploadsDir));
 }
+
+// Dynamic fallback route for /uploads/:storagePath (fetches from storageService/database across serverless lambdas)
+app.get('/uploads/:storagePath', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { storagePath } = req.params;
+    const buffer = await storageService.getFileBuffer(storagePath);
+    const ext = path.extname(storagePath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.mp4': 'video/mp4',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.txt': 'text/plain',
+      '.csv': 'text/csv',
+    };
+    if (mimeMap[ext]) {
+      res.setHeader('Content-Type', mimeMap[ext]);
+    }
+    return res.send(buffer);
+  } catch (err) {
+    next();
+  }
+});
 
 // System Healthcheck
 app.get(['/api/health', '/health'], async (_req: Request, res: Response) => {

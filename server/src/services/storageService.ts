@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { Readable } from 'stream';
 
+import { prisma } from '../prisma';
+
 export interface StorageResult {
   storagePath: string;
   fileName: string;
@@ -32,13 +34,45 @@ class LocalStorageService implements IStorageService {
     }
   }
 
-  async saveFile(buffer: Buffer, originalFilename: string, _mimeType: string): Promise<StorageResult> {
+  async saveFile(buffer: Buffer, originalFilename: string, mimeType: string): Promise<StorageResult> {
     const ext = path.extname(originalFilename);
     const safeBase = path.basename(originalFilename, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
     const uniqueName = `${Date.now()}-${uuidv4().substring(0, 8)}-${safeBase}${ext}`;
     const filePath = path.join(this.baseDir, uniqueName);
 
-    await fs.promises.writeFile(filePath, buffer);
+    // 1. Write to local filesystem if accessible
+    try {
+      if (!fs.existsSync(this.baseDir)) {
+        fs.mkdirSync(this.baseDir, { recursive: true });
+      }
+      await fs.promises.writeFile(filePath, buffer);
+    } catch (err) {
+      console.warn('[Storage] Local filesystem write skipped or restricted:', err);
+    }
+
+    // 2. Persist binary buffer into PostgreSQL StoredFile table
+    // This ensures files are permanently retained across Vercel serverless container lifecycles
+    try {
+      await prisma.storedFile.upsert({
+        where: { storagePath: uniqueName },
+        create: {
+          storagePath: uniqueName,
+          fileName: originalFilename,
+          mimeType: mimeType || 'application/octet-stream',
+          fileSize: buffer.length,
+          data: buffer,
+        },
+        update: {
+          fileName: originalFilename,
+          mimeType: mimeType || 'application/octet-stream',
+          fileSize: buffer.length,
+          data: buffer,
+        },
+      });
+    } catch (dbErr) {
+      console.warn('[Storage] Could not upsert into StoredFile table:', dbErr);
+    }
+
     return {
       storagePath: uniqueName,
       fileName: uniqueName,
@@ -47,17 +81,66 @@ class LocalStorageService implements IStorageService {
   }
 
   async getFileBuffer(storagePath: string): Promise<Buffer> {
+    // 1. Check local base directory
     const filePath = this.getAbsolutePath(storagePath);
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`File not found at storage path: ${storagePath}`);
+    if (fs.existsSync(filePath)) {
+      return fs.promises.readFile(filePath);
     }
-    return fs.promises.readFile(filePath);
+
+    // 2. Check alternative relative paths (e.g. ./uploads, server/uploads, /tmp/uploads)
+    const altPaths = [
+      path.resolve('./uploads', storagePath),
+      path.resolve('../uploads', storagePath),
+      path.resolve(process.cwd(), 'uploads', storagePath),
+      path.resolve(process.cwd(), 'server', 'uploads', storagePath),
+      path.resolve('/tmp/uploads', storagePath),
+    ];
+    for (const alt of altPaths) {
+      if (fs.existsSync(alt)) {
+        return fs.promises.readFile(alt);
+      }
+    }
+
+    // 3. Fallback to PostgreSQL StoredFile table (essential for Vercel Serverless / multi-instance deploys)
+    try {
+      const stored = await prisma.storedFile.findUnique({
+        where: { storagePath },
+      });
+      if (stored && stored.data) {
+        const buffer = Buffer.from(stored.data);
+        // Cache to local directory for subsequent reads in this invocation
+        try {
+          if (!fs.existsSync(this.baseDir)) {
+            fs.mkdirSync(this.baseDir, { recursive: true });
+          }
+          await fs.promises.writeFile(filePath, buffer);
+        } catch (cacheErr) {
+          // ignore cache write error
+        }
+        return buffer;
+      }
+    } catch (dbErr) {
+      console.warn(`[Storage] Database file retrieval error for "${storagePath}":`, dbErr);
+    }
+
+    throw new Error(`File not found at storage path: ${storagePath}`);
   }
 
   async deleteFile(storagePath: string): Promise<void> {
     const filePath = this.getAbsolutePath(storagePath);
     if (fs.existsSync(filePath)) {
-      await fs.promises.unlink(filePath);
+      try {
+        await fs.promises.unlink(filePath);
+      } catch (err) {
+        // ignore
+      }
+    }
+    try {
+      await prisma.storedFile.deleteMany({
+        where: { storagePath },
+      });
+    } catch (err) {
+      // ignore
     }
   }
 
