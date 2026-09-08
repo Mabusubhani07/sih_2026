@@ -6,6 +6,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Polyfill DOMMatrix and DOMPoint for pdf-parse (pdf.js) in Node.js
+if (typeof global !== 'undefined') {
+  if (typeof (global as any).DOMMatrix === 'undefined') {
+    (global as any).DOMMatrix = class DOMMatrix {};
+  }
+  if (typeof (global as any).DOMPoint === 'undefined') {
+    (global as any).DOMPoint = class DOMPoint {};
+  }
+}
+
 import authRoutes from './routes/authRoutes';
 import caseRoutes from './routes/caseRoutes';
 import documentRoutes from './routes/documentRoutes';
