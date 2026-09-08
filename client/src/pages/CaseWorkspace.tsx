@@ -71,6 +71,7 @@ export const CaseWorkspace: React.FC = () => {
   const [newEvidenceLoc, setNewEvidenceLoc] = useState<string>('Evidence Locker Room B, Shelf 4');
   const [newEvidenceFile, setNewEvidenceFile] = useState<File | null>(null);
   const [isAddingEvidence, setIsAddingEvidence] = useState<boolean>(false);
+  const [evidenceUploadProgress, setEvidenceUploadProgress] = useState<{ percent: number; chunk: number; totalChunks: number } | null>(null);
 
   const fetchCaseDetails = async (showSpinner = true) => {
     if (!id) return;
@@ -126,7 +127,9 @@ export const CaseWorkspace: React.FC = () => {
       if (newEvidenceFile) {
         // Automatically use chunked transmission for exhibits > 2.5 MB to bypass Vercel 4.5MB limit
         if (newEvidenceFile.size > 2.5 * 1024 * 1024) {
-          const chunkRes = await api.upload.uploadFileInChunks(newEvidenceFile);
+          const chunkRes = await api.upload.uploadFileInChunks(newEvidenceFile, (percent, chunk, totalChunks) => {
+            setEvidenceUploadProgress({ percent, chunk, totalChunks });
+          });
           await api.evidence.create({
             caseId: caseData.id,
             title: newEvidenceTitle.trim(),
@@ -167,6 +170,7 @@ export const CaseWorkspace: React.FC = () => {
       alert(err.message || 'Failed to add evidence.');
     } finally {
       setIsAddingEvidence(false);
+      setEvidenceUploadProgress(null);
     }
   };
 
@@ -883,20 +887,46 @@ export const CaseWorkspace: React.FC = () => {
                   </p>
                 )}
               </div>
+
+              {/* Upload Progress for Large Video/Audio/Document Chunks */}
+              {evidenceUploadProgress && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded space-y-1.5 animate-fadeIn">
+                  <div className="flex justify-between items-center text-[11px] font-semibold text-blue-900">
+                    <span className="flex items-center space-x-1.5">
+                      <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping inline-block mr-1"></span>
+                      Streaming exhibit chunk {evidenceUploadProgress.chunk} of {evidenceUploadProgress.totalChunks}...
+                    </span>
+                    <span>{evidenceUploadProgress.percent}%</span>
+                  </div>
+                  <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${evidenceUploadProgress.percent}%` }}
+                    />
+                  </div>
+                  <div className="text-[10px] text-blue-700">
+                    Encrypted slice streaming active (bypasses serverless limits). Bitstream SHA-256 computed.
+                  </div>
+                </div>
+              )}
+
               <div className="pt-2 flex justify-end space-x-2 border-t border-slate-200">
                 <button
                   type="button"
                   onClick={() => setShowAddEvidence(false)}
-                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs"
+                  disabled={isAddingEvidence}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isAddingEvidence}
-                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs"
+                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs disabled:opacity-50"
                 >
-                  {isAddingEvidence ? 'Registering...' : 'Register Evidence'}
+                  {isAddingEvidence
+                    ? (evidenceUploadProgress ? `Uploading ${evidenceUploadProgress.percent}%...` : 'Registering...')
+                    : 'Register Evidence'}
                 </button>
               </div>
             </form>
