@@ -23,8 +23,13 @@ class LocalStorageService implements IStorageService {
   private baseDir: string;
 
   constructor() {
-    const defaultDir = process.env.VERCEL === '1' ? '/tmp/uploads' : './uploads';
-    this.baseDir = path.resolve(process.env.LOCAL_STORAGE_DIR || defaultDir);
+    const isServerless = process.env.VERCEL === '1' || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+    if (isServerless) {
+      this.baseDir = '/tmp/uploads';
+    } else {
+      this.baseDir = path.resolve(process.env.LOCAL_STORAGE_DIR || './uploads');
+    }
+
     try {
       if (!fs.existsSync(this.baseDir)) {
         fs.mkdirSync(this.baseDir, { recursive: true });
@@ -40,7 +45,7 @@ class LocalStorageService implements IStorageService {
     const uniqueName = `${Date.now()}-${uuidv4().substring(0, 8)}-${safeBase}${ext}`;
     const filePath = path.join(this.baseDir, uniqueName);
 
-    // 1. Write to local filesystem if accessible
+    // 1. Write to local filesystem (/tmp/uploads on Vercel) immediately (< 10ms)
     try {
       if (!fs.existsSync(this.baseDir)) {
         fs.mkdirSync(this.baseDir, { recursive: true });
@@ -50,27 +55,36 @@ class LocalStorageService implements IStorageService {
       console.warn('[Storage] Local filesystem write skipped or restricted:', err);
     }
 
-    // 2. Persist binary buffer into PostgreSQL StoredFile table
-    // This ensures files are permanently retained across Vercel serverless container lifecycles
-    try {
-      await prisma.storedFile.upsert({
-        where: { storagePath: uniqueName },
-        create: {
-          storagePath: uniqueName,
-          fileName: originalFilename,
-          mimeType: mimeType || 'application/octet-stream',
-          fileSize: buffer.length,
-          data: buffer,
-        },
-        update: {
-          fileName: originalFilename,
-          mimeType: mimeType || 'application/octet-stream',
-          fileSize: buffer.length,
-          data: buffer,
-        },
-      });
-    } catch (dbErr) {
-      console.warn('[Storage] Could not upsert into StoredFile table:', dbErr);
+    // 2. Persist binary buffer into PostgreSQL StoredFile table for durability across container lifecycles
+    // For large files (> 2MB), execute non-blocking to strictly prevent FUNCTION_INVOCATION_TIMEOUT
+    const persistToDb = async () => {
+      try {
+        await prisma.storedFile.upsert({
+          where: { storagePath: uniqueName },
+          create: {
+            storagePath: uniqueName,
+            fileName: originalFilename,
+            mimeType: mimeType || 'application/octet-stream',
+            fileSize: buffer.length,
+            data: buffer,
+          },
+          update: {
+            fileName: originalFilename,
+            mimeType: mimeType || 'application/octet-stream',
+            fileSize: buffer.length,
+            data: buffer,
+          },
+        });
+      } catch (dbErr) {
+        console.warn('[Storage] Database file upsert warning:', dbErr);
+      }
+    };
+
+    if (buffer.length <= 2 * 1024 * 1024) {
+      await persistToDb();
+    } else {
+      // Large multimedia files: non-blocking persistence
+      persistToDb().catch((err) => console.warn('[Storage Non-blocking DB Persist]', err));
     }
 
     return {

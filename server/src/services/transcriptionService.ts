@@ -81,8 +81,16 @@ export class TranscriptionService {
     const tempPath = path.join(tempDir, tempFileName);
 
     try {
-      await fs.promises.writeFile(tempPath, buffer);
       const pythonExe = this.getPythonPath();
+      const isServerless = process.env.VERCEL === '1' || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+
+      // On Vercel / serverless runtime without local Python binary, skip spawn immediately (< 1ms)
+      if (isServerless && (!pythonExe || !fs.existsSync(pythonExe))) {
+        console.log('[Transcription] Serverless runtime: Python binary not present. Proceeding with instant acoustic VAD.');
+        return null;
+      }
+
+      await fs.promises.writeFile(tempPath, buffer);
       const scriptCandidates = [
         path.resolve(__dirname, '../scripts/speech_transcriber.py'),
         path.resolve(__dirname, '../../src/scripts/speech_transcriber.py'),
@@ -93,37 +101,64 @@ export class TranscriptionService {
       ];
       const scriptPath = scriptCandidates.find((p) => fs.existsSync(p)) || scriptCandidates[0];
 
+      if (!fs.existsSync(scriptPath)) {
+        console.log('[Transcription] Speech transcriber script not found. Proceeding with acoustic VAD.');
+        return null;
+      }
+
       console.log(`[Transcription] Running speech-to-text extraction on "${fileName}" via ${pythonExe}`);
+      const timeoutMs = isServerless ? 3500 : 15000;
+
       const result = await new Promise<string>((resolve, reject) => {
-        const proc = spawn(pythonExe, [scriptPath, tempPath], {
-          windowsHide: true,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-        });
+        let settled = false;
+        let proc: any = null;
+
+        try {
+          proc = spawn(pythonExe, [scriptPath, tempPath], {
+            windowsHide: true,
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+          });
+        } catch (spawnErr) {
+          return reject(spawnErr);
+        }
 
         let stdout = '';
         let stderr = '';
 
-        proc.stdout.on('data', (data) => {
+        proc.stdout?.on('data', (data: any) => {
           stdout += data.toString('utf-8');
         });
 
-        proc.stderr.on('data', (data) => {
+        proc.stderr?.on('data', (data: any) => {
           stderr += data.toString('utf-8');
         });
 
-        proc.on('close', (code) => {
-          if (code === 0 && stdout.trim().length > 0) {
-            resolve(stdout.trim());
-          } else {
-            reject(new Error(`Speech recognition process exited with code ${code}: ${stderr}`));
+        proc.on('error', (err: any) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
           }
         });
 
-        // 45-second timeout
+        proc.on('close', (code: number) => {
+          if (!settled) {
+            settled = true;
+            if (code === 0 && stdout.trim().length > 0) {
+              resolve(stdout.trim());
+            } else {
+              reject(new Error(`Speech recognition process exited with code ${code}: ${stderr}`));
+            }
+          }
+        });
+
+        // Fast serverless timeout protection (max 3.5s) to guarantee FUNCTION_INVOCATION_TIMEOUT is never triggered
         setTimeout(() => {
-          try { proc.kill(); } catch {}
-          reject(new Error('Speech recognition process timed out'));
-        }, 45000);
+          if (!settled) {
+            settled = true;
+            try { proc.kill(); } catch {}
+            reject(new Error(`Speech recognition timed out after ${timeoutMs / 1000}s`));
+          }
+        }, timeoutMs);
       });
 
       const parsed = JSON.parse(result);

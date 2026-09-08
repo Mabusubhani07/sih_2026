@@ -120,8 +120,8 @@ export class LocalOCRProvider implements IOCRProvider {
     language: string = 'eng'
   ): Promise<{ text: string; confidence: number; language: string }> {
     const lang = language.trim() || 'eng';
-    const isServerless = process.env.VERCEL === '1';
-    const timeoutMs = isServerless ? 22000 : 55000;
+    const isServerless = process.env.VERCEL === '1' || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+    const timeoutMs = isServerless ? 6000 : 45000;
 
     console.log(
       `[OCR] Local OCR running with Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes, timeout: ${timeoutMs / 1000}s)`
