@@ -138,8 +138,12 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
           v.versionNumber === selectedVersionNum ? { ...v, extractedText: updatedText } : v
         ),
       }));
-      setTranscriptSuccessMsg('High-accuracy transcript generated and sealed.');
-      setTimeout(() => setTranscriptSuccessMsg(null), 4000);
+      if (res.method === 'AI_SPEECH_TO_TEXT') {
+        setTranscriptSuccessMsg('High-accuracy neural transcript generated and sealed under Section 65B.');
+      } else {
+        setTranscriptSuccessMsg('Acoustic signal transcript generated. Tip: You can also use "Live Browser STT" during playback for real-time speech.');
+      }
+      setTimeout(() => setTranscriptSuccessMsg(null), 5000);
       onRefresh?.();
     } catch (err: any) {
       alert(err.message || 'Failed to generate transcription.');

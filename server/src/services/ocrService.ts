@@ -1,3 +1,7 @@
+import '../utils/domMatrixPolyfill';
+import path from 'path';
+import fs from 'fs';
+
 export interface OCRResult {
   text: string;
   confidence: number;
@@ -10,9 +14,6 @@ export interface IOCRProvider {
   recognize(imageBuffer: Buffer, language?: string): Promise<{ text: string; confidence: number; language: string }>;
 }
 
-import path from 'path';
-import fs from 'fs';
-
 /**
  * Local OCR Provider using Tesseract.js (Pure JS/WASM engine - runs locally on Node without system binaries)
  */
@@ -20,6 +21,7 @@ export class LocalOCRProvider implements IOCRProvider {
   private static cachedWorker: any = null;
   private static cachedLang: string = '';
   private static initPromise: Promise<any> | null = null;
+  private static recognitionQueue: Promise<any> = Promise.resolve();
 
   private static async getWorker(lang: string) {
     if (this.cachedWorker && this.cachedLang === lang) {
@@ -81,33 +83,41 @@ export class LocalOCRProvider implements IOCRProvider {
     const lang = language.trim() || 'eng';
     console.log(`[OCR] Local OCR running with Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes)`);
 
-    try {
-      const worker = await LocalOCRProvider.getWorker(lang);
-      const result = await worker.recognize(imageBuffer);
-      const rawText = result.data.text || '';
-      const confidence = typeof result.data.confidence === 'number' ? result.data.confidence : 0;
+    // Queue worker execution sequentially to protect single WASM instance from concurrency collisions
+    const execute = async () => {
+      try {
+        const worker = await LocalOCRProvider.getWorker(lang);
+        const result = await worker.recognize(imageBuffer);
+        const rawText = result.data.text || '';
+        const confidence = typeof result.data.confidence === 'number' ? result.data.confidence : 0;
 
-      console.log(
-        `[OCR] Local OCR completed (confidence: ${confidence.toFixed(1)}%, characters: ${rawText.trim().length})`
-      );
+        console.log(
+          `[OCR] Local OCR completed (confidence: ${confidence.toFixed(1)}%, characters: ${rawText.trim().length})`
+        );
 
-      return {
-        text: rawText.trim(),
-        confidence,
-        language: lang,
-      };
-    } catch (err: any) {
-      console.warn('[OCR] Worker recognize failed, resetting worker instance:', err.message);
-      if (LocalOCRProvider.cachedWorker) {
-        try {
-          await LocalOCRProvider.cachedWorker.terminate();
-        } catch {
-          // ignore
+        return {
+          text: rawText.trim(),
+          confidence,
+          language: lang,
+        };
+      } catch (err: any) {
+        console.warn('[OCR] Worker recognize failed, resetting worker instance:', err.message);
+        if (LocalOCRProvider.cachedWorker) {
+          try {
+            await LocalOCRProvider.cachedWorker.terminate();
+          } catch {
+            // ignore
+          }
+          LocalOCRProvider.cachedWorker = null;
         }
-        LocalOCRProvider.cachedWorker = null;
+        throw err;
       }
-      throw err;
-    }
+    };
+
+    // Chain to recognition queue
+    const queuedPromise = LocalOCRProvider.recognitionQueue.then(execute, execute);
+    LocalOCRProvider.recognitionQueue = queuedPromise.catch(() => {});
+    return queuedPromise;
   }
 }
 
@@ -244,9 +254,18 @@ export class OCRService {
           confidence: res.confidence,
         });
       } catch (pageErr: any) {
-        console.error(`[OCR] Failed processing page ${pageNum}:`, pageErr);
-        throw new Error(`OCR engine could not process page ${pageNum}: ${pageErr.message || 'Recognition error'}`);
+        console.error(`[OCR] Warning on page ${pageNum}:`, pageErr.message);
+        pageResults.push({
+          pageNum,
+          text: `[Page ${pageNum}: Optical recognition notice - image could not be processed]`,
+          confidence: 0,
+        });
       }
+    }
+
+    const hasAnyRealText = pageResults.some((p) => p.confidence > 0 && p.text.trim().length > 0);
+    if (!hasAnyRealText && pageResults.length > 0) {
+      throw new Error(`OCR engine could not recognize text on any of the ${pageImages.length} page(s).`);
     }
 
     // Combine in strict page order

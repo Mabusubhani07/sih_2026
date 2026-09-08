@@ -1,3 +1,4 @@
+import '../utils/domMatrixPolyfill';
 import { OCRService } from './ocrService';
 import { TranscriptionService } from './transcriptionService';
 
@@ -182,9 +183,12 @@ export class TextExtractionService {
 
       const pageCount = textResult.total || (textResult.pages ? textResult.pages.length : 1);
 
-      // If meaningful alphanumeric native text is found, return native text
+      // Step 1: Check density of native digital text
       const alphaNumericContent = cleanText.replace(/[^a-zA-Z0-9]/g, '');
-      if (alphaNumericContent.length >= 5) {
+      const minRequiredChars = pageCount > 1 ? pageCount * 40 : 60;
+      const hasSubstantialNativeText = alphaNumericContent.length >= minRequiredChars;
+
+      if (hasSubstantialNativeText) {
         console.log(
           `[OCR] Native PDF text extraction successful (${cleanText.length} characters across ${pageCount} page(s), method: NATIVE_TEXT). Skipping OCR.`
         );
@@ -197,9 +201,9 @@ export class TextExtractionService {
         };
       }
 
-      // Step 2: Scanned / image-only PDF detected -> Multi-Page OCR
+      // Step 2: Scanned / raster PDF detected (or minimal native text) -> Multi-Page Optical Recognition
       console.log(
-        `[OCR] PDF "${fileName}" contains negligible native text (${cleanText.length} chars). Detected scanned/raster PDF exhibit. Initiating optical recognition.`
+        `[OCR] PDF "${fileName}" contains sparse native text (${cleanText.length} chars). Initiating optical character recognition across pages.`
       );
 
       const pageImages: Buffer[] = [];
@@ -239,11 +243,15 @@ export class TextExtractionService {
       }
 
       if (pageImages.length > 0) {
-        // Run OCR with a safe timeout (up to 12s on node, 6s on Vercel)
+        // Run OCR with a safe adaptive timeout (up to 90s locally, 25s on serverless)
         try {
           const isServerless = process.env.VERCEL === '1';
-          const timeoutMs = isServerless ? 6000 : 12000;
-          const ocrPromise = OCRService.recognizePages(pageImages.slice(0, 10), options?.language);
+          const timeoutMs = isServerless ? 25000 : Math.max(60000, pageImages.length * 15000);
+          const maxPagesToProcess = isServerless ? 5 : 15;
+          const pagesToProcess = pageImages.slice(0, maxPagesToProcess);
+
+          console.log(`[OCR] Running OCR on ${pagesToProcess.length} page image(s) for "${fileName}" (timeout: ${timeoutMs / 1000}s)`);
+          const ocrPromise = OCRService.recognizePages(pagesToProcess, options?.language);
           const timeoutPromise = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('PDF OCR recognition timed out')), timeoutMs)
           );
@@ -266,6 +274,18 @@ export class TextExtractionService {
         } catch (ocrErr: any) {
           console.warn(`[OCR] PDF OCR notice for "${fileName}":`, ocrErr.message);
         }
+      }
+
+      // If OCR yielded nothing or timed out, but some native text was extracted, return native text
+      if (cleanText.length > 0) {
+        console.log(`[OCR] Falling back to partial native text (${cleanText.length} characters) for "${fileName}"`);
+        return {
+          text: cleanText,
+          isOcr: false,
+          pageCount,
+          confidence: 0.85,
+          method: 'NATIVE_TEXT',
+        };
       }
 
       return this.generateEvidentiaryTranscript(buffer, fileName, 'SCANNED PDF', 'Scanned Document Exhibit', pageCount);
@@ -536,9 +556,10 @@ export class TextExtractionService {
     options?: ExtractionOptions
   ): Promise<ExtractionResult> {
     const isServerless = process.env.VERCEL === '1';
-    const timeoutMs = isServerless ? 5000 : 10000;
+    const timeoutMs = isServerless ? 25000 : 60000;
 
     try {
+      console.log(`[OCR] Running OCR on image "${fileName}" (size: ${(buffer.length / 1024).toFixed(1)} KB, timeout: ${timeoutMs / 1000}s)`);
       const ocrPromise = OCRService.recognizeImage(buffer, options?.language);
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Image OCR recognition timed out')), timeoutMs)

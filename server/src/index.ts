@@ -1,4 +1,5 @@
 import './polyfills'; // MUST be first — sets up DOMMatrix/DOMPoint before pdf.js loads
+import './utils/domMatrixPolyfill';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import path from 'path';
