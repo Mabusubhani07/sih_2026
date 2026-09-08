@@ -72,9 +72,9 @@ export const CaseWorkspace: React.FC = () => {
   const [newEvidenceFile, setNewEvidenceFile] = useState<File | null>(null);
   const [isAddingEvidence, setIsAddingEvidence] = useState<boolean>(false);
 
-  const fetchCaseDetails = async () => {
+  const fetchCaseDetails = async (showSpinner = true) => {
     if (!id) return;
-    setIsLoading(true);
+    if (showSpinner) setIsLoading(true);
     try {
       const data = await api.cases.getById(id);
       setCaseData(data);
@@ -90,13 +90,27 @@ export const CaseWorkspace: React.FC = () => {
     } catch (err) {
       console.error('Failed to load case workspace:', err);
     } finally {
-      setIsLoading(false);
+      if (showSpinner) setIsLoading(false);
     }
   };
 
   useEffect(() => {
     fetchCaseDetails();
   }, [id]);
+
+  // Live polling (every 3.5s) for documents undergoing background text/speech extraction
+  useEffect(() => {
+    const hasProcessing = caseData?.documents?.some(
+      (d) => d.processingStatus === 'PROCESSING' || d.processingStatus === 'UPLOADED'
+    );
+    if (!hasProcessing) return;
+
+    const timer = setInterval(() => {
+      fetchCaseDetails(false);
+    }, 3500);
+
+    return () => clearInterval(timer);
+  }, [caseData?.documents]);
 
   const handleCopyHash = (hash: string) => {
     navigator.clipboard.writeText(hash);
@@ -110,14 +124,31 @@ export const CaseWorkspace: React.FC = () => {
     setIsAddingEvidence(true);
     try {
       if (newEvidenceFile) {
-        const formData = new FormData();
-        formData.append('caseId', caseData.id);
-        formData.append('title', newEvidenceTitle.trim());
-        formData.append('description', newEvidenceDesc.trim());
-        formData.append('category', newEvidenceCat);
-        formData.append('custodyLocation', newEvidenceLoc.trim());
-        formData.append('file', newEvidenceFile);
-        await api.evidence.create(formData);
+        // Automatically use chunked transmission for exhibits > 2.5 MB to bypass Vercel 4.5MB limit
+        if (newEvidenceFile.size > 2.5 * 1024 * 1024) {
+          const chunkRes = await api.upload.uploadFileInChunks(newEvidenceFile);
+          await api.evidence.create({
+            caseId: caseData.id,
+            title: newEvidenceTitle.trim(),
+            description: newEvidenceDesc.trim(),
+            category: newEvidenceCat as any,
+            custodyLocation: newEvidenceLoc.trim(),
+            storagePath: chunkRes.storagePath,
+            fileName: newEvidenceFile.name,
+            fileSize: newEvidenceFile.size,
+            mimeType: newEvidenceFile.type || 'application/octet-stream',
+            sha256: chunkRes.sha256,
+          } as any);
+        } else {
+          const formData = new FormData();
+          formData.append('caseId', caseData.id);
+          formData.append('title', newEvidenceTitle.trim());
+          formData.append('description', newEvidenceDesc.trim());
+          formData.append('category', newEvidenceCat);
+          formData.append('custodyLocation', newEvidenceLoc.trim());
+          formData.append('file', newEvidenceFile);
+          await api.evidence.create(formData);
+        }
       } else {
         await api.evidence.create({
           caseId: caseData.id,
@@ -273,7 +304,7 @@ export const CaseWorkspace: React.FC = () => {
             )}
 
             <button
-              onClick={fetchCaseDetails}
+              onClick={() => fetchCaseDetails(true)}
               className="p-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded transition"
               title="Refresh Workspace"
             >

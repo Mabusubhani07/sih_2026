@@ -21,11 +21,23 @@ export class DocumentController {
     try {
       const user = req.user!;
       const { caseId } = req.params;
-      const { title, documentType, subCategory, isConfidential, changeSummary } = req.body;
+      const {
+        title,
+        documentType,
+        subCategory,
+        isConfidential,
+        changeSummary,
+        uploadId,
+        storagePath,
+        fileName,
+        fileSize,
+        mimeType,
+        sha256,
+      } = req.body;
       const file = req.file;
 
-      if (!file) {
-        return res.status(400).json({ error: 'No official file attached for upload.' });
+      if (!file && !uploadId && !storagePath) {
+        return res.status(400).json({ error: 'No official file attached or upload token provided.' });
       }
 
       const caseRecord = await prisma.case.findUnique({
@@ -43,18 +55,26 @@ export class DocumentController {
         });
       }
 
-      // Execute centralized document ingestion pipeline
+      // Execute expedited centralized document ingestion pipeline
       const doc = await DocumentIngestionService.ingest({
         caseId,
         userId: user.id,
         userRole: user.role,
         departmentId: user.departmentId,
-        file: {
-          originalname: file.originalname,
-          mimetype: file.mimetype,
-          size: file.size,
-          buffer: file.buffer,
-        },
+        file: file
+          ? {
+              originalname: file.originalname,
+              mimetype: file.mimetype,
+              size: file.size,
+              buffer: file.buffer,
+            }
+          : undefined,
+        uploadId,
+        storagePath,
+        fileName: fileName || (file ? file.originalname : title),
+        fileSize: fileSize ? parseInt(String(fileSize), 10) : file ? file.size : 0,
+        mimeType: mimeType || (file ? file.mimetype : 'application/octet-stream'),
+        sha256Hash: sha256,
         title,
         documentType,
         subCategory,
@@ -88,11 +108,19 @@ export class DocumentController {
     try {
       const user = req.user!;
       const { id } = req.params;
-      const { changeSummary } = req.body;
+      const {
+        changeSummary,
+        uploadId,
+        storagePath: providedStoragePath,
+        fileName: providedFileName,
+        fileSize: providedFileSize,
+        mimeType: providedMimeType,
+        sha256: providedSha256,
+      } = req.body;
       const file = req.file;
 
-      if (!file) {
-        return res.status(400).json({ error: 'File attachment required for new version.' });
+      if (!file && !uploadId && !providedStoragePath) {
+        return res.status(400).json({ error: 'File attachment or chunk token required for new version.' });
       }
 
       const doc = await prisma.document.findUnique({
@@ -118,55 +146,62 @@ export class DocumentController {
         });
       }
 
-      // 1. Strict File Validation
-      const validation = FileValidationService.validate(file);
-      if (!validation.isValid) {
-        return res.status(400).json({ error: validation.error || 'File validation failed.' });
-      }
+      let storagePath = providedStoragePath || '';
+      let originalFileName = providedFileName || 'revised_version';
+      let mimeType = providedMimeType || 'application/octet-stream';
+      let fileSize = providedFileSize ? parseInt(String(providedFileSize), 10) : 0;
+      let sha256Hash = providedSha256 || '';
+      let payloadBytes: Buffer | undefined = undefined;
 
-      const nextVersionNumber = doc.currentVersionNumber + 1;
+      if (file) {
+        // 1. Strict File Validation
+        const validation = FileValidationService.validate(file);
+        if (!validation.isValid) {
+          return res.status(400).json({ error: validation.error || 'File validation failed.' });
+        }
 
-      // 2. Calculate REAL SHA-256 for the new version
-      const sha256Hash = HashService.computeSha256(file.buffer);
+        sha256Hash = HashService.computeSha256(file.buffer);
+        originalFileName = file.originalname;
+        mimeType = validation.normalizedMimeType;
+        payloadBytes = file.buffer;
 
-      // 3. Save file to storage
-      const stored = await storageService.saveFile(
-        file.buffer,
-        file.originalname,
-        validation.normalizedMimeType
-      );
-
-      // 4. Text Extraction & Expedited Ingestion (Fail-safe for serverless execution)
-      let extractedText = '';
-      let isOcr = false;
-      try {
-        const extraction = await TextExtractionService.extractText(
+        const stored = await storageService.saveFile(
           file.buffer,
           file.originalname,
           validation.normalizedMimeType
         );
-        extractedText = extraction.text;
-        isOcr = extraction.isOcr;
-      } catch (extractErr: any) {
-        console.warn(`[Version Upload] Text extraction non-fatal notice for "${file.originalname}":`, extractErr.message);
-        extractedText = `=== DIGITAL EVIDENCE REVISION ===\nExhibit: ${file.originalname}\nVersion: v${nextVersionNumber}\nSize: ${(file.size / 1024).toFixed(1)} KB\nSHA-256: ${sha256Hash}`;
+        storagePath = stored.storagePath;
+        fileSize = stored.fileSize;
       }
 
-      // 5. Create new DocumentVersion record and update Document.currentVersionNumber
+      if (!sha256Hash) {
+        try {
+          if (!payloadBytes) {
+            payloadBytes = await storageService.getFileBuffer(storagePath);
+          }
+          sha256Hash = HashService.computeSha256(payloadBytes);
+        } catch (hashErr) {
+          console.warn('[Version Upload] Hash computation warning:', hashErr);
+        }
+      }
+
+      const nextVersionNumber = doc.currentVersionNumber + 1;
+
+      // Create new DocumentVersion record and update Document.currentVersionNumber immediately (< 300ms)
       const [newVersion, updatedDoc] = await prisma.$transaction([
         prisma.documentVersion.create({
           data: {
             documentId: id,
             versionNumber: nextVersionNumber,
-            fileName: stored.fileName,
-            originalFileName: file.originalname,
-            mimeType: validation.normalizedMimeType,
-            fileSize: stored.fileSize,
-            storagePath: stored.storagePath,
+            fileName: originalFileName,
+            originalFileName,
+            mimeType,
+            fileSize,
+            storagePath,
             sha256Hash,
             hashAlgorithm: 'SHA-256',
             changeSummary: changeSummary || `Updated to revision v${nextVersionNumber}.`,
-            extractedText,
+            extractedText: '',
             uploadedById: user.id,
           },
         }),
@@ -174,9 +209,7 @@ export class DocumentController {
           where: { id },
           data: {
             currentVersionNumber: nextVersionNumber,
-            ocrText: extractedText,
-            isOcrProcessed: isOcr,
-            processingStatus: 'READY',
+            processingStatus: 'PROCESSING',
           },
           include: {
             versions: { orderBy: { versionNumber: 'desc' } },
@@ -186,30 +219,52 @@ export class DocumentController {
         }),
       ]);
 
-      // 6. Update metadata with latest version findings
-      const metadata = MetadataExtractionService.extract(
-        extractedText,
-        file.originalname
-      );
-      await prisma.documentMetadata.upsert({
-        where: { documentId: id },
-        update: {
-          referenceNumber: metadata.referenceNumber,
-          documentDate: metadata.documentDate,
-          entities: JSON.stringify(metadata.entities),
-          keywords: JSON.stringify(metadata.keywords),
-        },
-        create: {
-          documentId: id,
-          referenceNumber: metadata.referenceNumber,
-          documentDate: metadata.documentDate,
-          entities: JSON.stringify(metadata.entities),
-          keywords: JSON.stringify(metadata.keywords),
-        },
+      // Trigger background extraction for the new version
+      const initialBytes = payloadBytes;
+      setImmediate(async () => {
+        try {
+          const bytes = initialBytes || (await storageService.getFileBuffer(storagePath));
+          const extraction = await TextExtractionService.extractText(bytes, originalFileName, mimeType);
+          await prisma.documentVersion.updateMany({
+            where: { documentId: id, versionNumber: nextVersionNumber },
+            data: { extractedText: extraction.text },
+          });
+          await prisma.document.update({
+            where: { id },
+            data: {
+              ocrText: extraction.text,
+              isOcrProcessed: extraction.isOcr,
+              processingStatus: 'READY',
+            },
+          });
+          const metadata = MetadataExtractionService.extract(extraction.text, originalFileName);
+          await prisma.documentMetadata.upsert({
+            where: { documentId: id },
+            update: {
+              referenceNumber: metadata.referenceNumber,
+              documentDate: metadata.documentDate,
+              entities: JSON.stringify(metadata.entities),
+              keywords: JSON.stringify(metadata.keywords),
+            },
+            create: {
+              documentId: id,
+              referenceNumber: metadata.referenceNumber,
+              documentDate: metadata.documentDate,
+              entities: JSON.stringify(metadata.entities),
+              keywords: JSON.stringify(metadata.keywords),
+            },
+          });
+        } catch (bgErr: any) {
+          console.warn('[Version Upload] Background extraction warning:', bgErr.message);
+          await prisma.document.update({
+            where: { id },
+            data: { processingStatus: 'READY' },
+          }).catch(() => {});
+        }
       });
 
-      // 7. Audit Log
-      await AuditService.log({
+      // Audit Log (non-blocking)
+      AuditService.log({
         userId: user.id,
         userRole: user.role,
         action: AUDIT_ACTIONS.VERSION_CREATED,
@@ -219,16 +274,15 @@ export class DocumentController {
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
         details: {
+          documentNumber: doc.documentNumber,
           versionNumber: nextVersionNumber,
-          previousVersion: doc.currentVersionNumber,
+          fileName: originalFileName,
           sha256: sha256Hash,
-          fileName: file.originalname,
           changeSummary,
-          isOcr,
         },
-      });
+      }).catch(() => {});
 
-      // 8. Notify case members (non-blocking for fast upload response)
+      // Notify case members (non-blocking for fast upload response)
       NotificationService.notifyCaseMembers(
         doc.caseId,
         `New Version v${nextVersionNumber}: ${doc.documentNumber}`,
@@ -238,13 +292,10 @@ export class DocumentController {
         `/cases/${doc.caseId}?doc=${doc.id}`
       ).catch((err) => console.warn('[Version Notification Error]', err));
 
-      return res.status(201).json({
-        document: updatedDoc,
-        version: newVersion,
-      });
+      return res.status(201).json({ document: updatedDoc, version: newVersion });
     } catch (err: any) {
       console.error('uploadNewVersion error:', err);
-      return res.status(500).json({ error: err.message || 'Failed to record document revision.' });
+      return res.status(400).json({ error: err.message || 'Failed to upload new document version.' });
     }
   }
 

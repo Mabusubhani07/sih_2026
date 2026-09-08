@@ -20,6 +20,7 @@ import auditRoutes from './routes/auditRoutes';
 import userRoutes from './routes/userRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import hierarchyRoutes from './routes/hierarchyRoutes';
+import uploadRoutes from './routes/uploadRoutes';
 
 import { storageService } from './services/storageService';
 
@@ -101,6 +102,7 @@ const mountOfficialRoutes = (prefix: string) => {
   app.use(`${prefix}/documents`, documentRoutes);
   app.use(`${prefix}/evidence`, evidenceRoutes);
   app.use(`${prefix}/hierarchy`, hierarchyRoutes);
+  app.use(`${prefix}/upload`, uploadRoutes);
   app.use(`${prefix}/search`, searchRoutes);
   app.use(`${prefix}/ai`, aiRoutes);
   app.use(`${prefix}/audit-logs`, auditRoutes);

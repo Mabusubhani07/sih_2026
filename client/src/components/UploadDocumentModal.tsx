@@ -14,6 +14,7 @@ export const UploadDocumentModal: React.FC<Props> = ({ caseId, onClose, onUpload
   const [isConfidential, setIsConfidential] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ percent: number; chunk: number; totalChunks: number } | null>(null);
   const [error, setError] = useState('');
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -35,22 +36,45 @@ export const UploadDocumentModal: React.FC<Props> = ({ caseId, onClose, onUpload
     }
 
     setIsUploading(true);
+    setUploadProgress(null);
     setError('');
 
     try {
-      const formData = new FormData();
-      formData.append('title', title.trim());
-      formData.append('documentType', documentType);
-      formData.append('isConfidential', String(isConfidential));
-      formData.append('file', file);
+      let createdDoc;
 
-      const createdDoc = await api.documents.upload(caseId, formData);
+      // Automatically use chunked transmission for files > 2.5 MB to bypass Vercel 4.5MB gateway limits
+      if (file.size > 2.5 * 1024 * 1024) {
+        const chunkRes = await api.upload.uploadFileInChunks(file, (percent, chunk, totalChunks) => {
+          setUploadProgress({ percent, chunk, totalChunks });
+        });
+
+        createdDoc = await api.documents.upload(caseId, {
+          title: title.trim(),
+          documentType,
+          isConfidential,
+          storagePath: chunkRes.storagePath,
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type || 'application/octet-stream',
+          sha256: chunkRes.sha256,
+        });
+      } else {
+        const formData = new FormData();
+        formData.append('title', title.trim());
+        formData.append('documentType', documentType);
+        formData.append('isConfidential', String(isConfidential));
+        formData.append('file', file);
+
+        createdDoc = await api.documents.upload(caseId, formData);
+      }
+
       onUploaded(createdDoc);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Failed to upload and seal document.');
     } finally {
       setIsUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -165,12 +189,35 @@ export const UploadDocumentModal: React.FC<Props> = ({ caseId, onClose, onUpload
             </label>
           </div>
 
+          {/* Upload Progress Bar for Large Video/Audio/Document Chunks */}
+          {uploadProgress && (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded space-y-1.5 animate-fadeIn">
+              <div className="flex justify-between items-center text-[11px] font-semibold text-blue-900">
+                <span className="flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping inline-block mr-1"></span>
+                  Streaming chunk {uploadProgress.chunk} of {uploadProgress.totalChunks}...
+                </span>
+                <span>{uploadProgress.percent}%</span>
+              </div>
+              <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${uploadProgress.percent}%` }}
+                />
+              </div>
+              <div className="text-[10px] text-blue-700">
+                Encrypted high-speed slice streaming (bypasses gateway limits). Assembly is automated.
+              </div>
+            </div>
+          )}
+
           {/* Buttons */}
           <div className="pt-2 flex justify-end space-x-2 border-t border-slate-200">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-medium"
+              disabled={isUploading}
+              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-medium disabled:opacity-50"
             >
               Cancel
             </button>
@@ -179,7 +226,7 @@ export const UploadDocumentModal: React.FC<Props> = ({ caseId, onClose, onUpload
               disabled={isUploading}
               className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-semibold shadow-xs transition disabled:opacity-50"
             >
-              {isUploading ? 'Sealing Document...' : 'Upload & Compute Hash'}
+              {isUploading ? (uploadProgress ? `Uploading ${uploadProgress.percent}%...` : 'Sealing Document...') : 'Upload & Compute Hash'}
             </button>
           </div>
         </form>

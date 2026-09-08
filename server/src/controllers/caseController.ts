@@ -120,10 +120,21 @@ export class CaseController {
         });
       }
 
-      // Check for existing FIR number
-      const existingFir = await prisma.case.findUnique({
-        where: { firNumber: firNumber.trim() },
-      });
+      // Parallelize validations and default department lookups
+      const [existingFir, count, defaultDept] = await Promise.all([
+        prisma.case.findUnique({
+          where: { firNumber: firNumber.trim() },
+          select: { id: true },
+        }),
+        prisma.case.count(),
+        assignedDepartmentId
+          ? Promise.resolve(null)
+          : prisma.department.findFirst({
+              where: { code: 'POLICE' },
+              select: { id: true },
+            }),
+      ]);
+
       if (existingFir) {
         return res.status(409).json({
           error: `An official case record is already registered under FIR number: ${firNumber}`,
@@ -132,17 +143,8 @@ export class CaseController {
 
       // Generate realistic Case ID (e.g. CASE-2026-00421)
       const year = new Date().getFullYear();
-      const count = await prisma.case.count();
       const caseNumber = `CASE-${year}-${String(count + 101).padStart(5, '0')}`;
-
-      // Default department to POLICE or INVESTIGATION if not provided
-      let targetDeptId = assignedDepartmentId;
-      if (!targetDeptId) {
-        const dept = await prisma.department.findFirst({
-          where: { code: 'POLICE' },
-        });
-        targetDeptId = dept?.id || user.departmentId;
-      }
+      const targetDeptId = assignedDepartmentId || defaultDept?.id || user.departmentId;
 
       const newCase = await prisma.case.create({
         data: {
@@ -174,8 +176,8 @@ export class CaseController {
         },
       });
 
-      // Audit Log
-      await AuditService.log({
+      // Audit Log (non-blocking for sub-second response)
+      AuditService.log({
         userId: user.id,
         userRole: user.role,
         action: AUDIT_ACTIONS.CASE_CREATED,
@@ -189,7 +191,7 @@ export class CaseController {
           title: newCase.title,
           policeStation: newCase.policeStation,
         },
-      });
+      }).catch((err) => console.warn('[Audit Log Warning]', err));
 
       return res.status(201).json(newCase);
     } catch (err: any) {
@@ -201,67 +203,81 @@ export class CaseController {
   static async getCaseById(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      const caseRecord = await prisma.case.findUnique({
-        where: { id },
-        include: {
-          assignedDepartment: true,
-          createdBy: {
-            select: { id: true, name: true, badgeNumber: true, role: true, department: true },
-          },
-          leadInvestigator: {
-            select: { id: true, name: true, badgeNumber: true, role: true, department: true },
-          },
-          memberships: {
-            include: {
-              user: {
-                select: { id: true, name: true, email: true, badgeNumber: true, role: true, department: true },
-              },
+
+      // Parallelize case detail retrieval and audit timeline queries
+      const [caseRecord, auditEvents] = await Promise.all([
+        prisma.case.findUnique({
+          where: { id },
+          include: {
+            assignedDepartment: true,
+            createdBy: {
+              select: { id: true, name: true, badgeNumber: true, role: true, department: true },
             },
-          },
-          documents: {
-            where: { status: { not: 'DELETED' } },
-            include: {
-              createdBy: { select: { id: true, name: true, badgeNumber: true } },
-              versions: {
-                orderBy: { versionNumber: 'desc' },
-                take: 1,
-              },
-              metadata: true,
-              department: true,
-              shares: {
-                where: { revokedAt: null },
-                include: {
-                  sharedWithUser: { select: { id: true, name: true, role: true } },
+            leadInvestigator: {
+              select: { id: true, name: true, badgeNumber: true, role: true, department: true },
+            },
+            memberships: {
+              include: {
+                user: {
+                  select: { id: true, name: true, email: true, badgeNumber: true, role: true, department: true },
                 },
               },
             },
-            orderBy: { createdAt: 'desc' },
-          },
-          evidenceItems: {
-            include: {
-              document: {
-                select: { id: true, documentNumber: true, title: true },
+            documents: {
+              where: { status: { not: 'DELETED' } },
+              include: {
+                createdBy: { select: { id: true, name: true, badgeNumber: true } },
+                versions: {
+                  orderBy: { versionNumber: 'desc' },
+                  take: 1,
+                },
+                metadata: true,
+                department: true,
+                shares: {
+                  where: { revokedAt: null },
+                  include: {
+                    sharedWithUser: { select: { id: true, name: true, role: true } },
+                  },
+                },
               },
+              orderBy: { createdAt: 'desc' },
             },
-            orderBy: { createdAt: 'desc' },
+            evidenceItems: {
+              include: {
+                document: {
+                  select: { id: true, documentNumber: true, title: true },
+                },
+              },
+              orderBy: { createdAt: 'desc' },
+            },
           },
-        },
-      });
+        }),
+        prisma.auditLog.findMany({
+          where: { caseId: id },
+          include: { user: { select: { name: true, role: true, badgeNumber: true } } },
+          orderBy: { timestamp: 'asc' },
+          take: 30,
+        }),
+      ]);
 
       if (!caseRecord) {
         return res.status(404).json({ error: 'Case record not found.' });
       }
 
-      // Generate dynamic case milestone timeline based on real data
-      const auditEvents = await prisma.auditLog.findMany({
-        where: { caseId: id },
-        include: { user: { select: { name: true, role: true, badgeNumber: true } } },
-        orderBy: { timestamp: 'asc' },
-        take: 30,
-      });
+      // Truncate heavy OCR and extracted text for fast network transport
+      // Full text is retrieved on demand when viewing individual documents
+      const sanitizedDocuments = (caseRecord.documents || []).map((doc) => ({
+        ...doc,
+        ocrText: doc.ocrText ? (doc.ocrText.length > 250 ? doc.ocrText.substring(0, 250) + '…' : doc.ocrText) : null,
+        versions: (doc.versions || []).map((ver) => ({
+          ...ver,
+          extractedText: ver.extractedText ? (ver.extractedText.length > 250 ? ver.extractedText.substring(0, 250) + '…' : ver.extractedText) : null,
+        })),
+      }));
 
       return res.json({
         ...caseRecord,
+        documents: sanitizedDocuments,
         timeline: auditEvents,
       });
     } catch (err) {

@@ -64,6 +64,12 @@ export class EvidenceController {
         collectedBy,
         custodyLocation,
         notes,
+        uploadId,
+        storagePath,
+        fileName,
+        fileSize,
+        mimeType,
+        sha256,
       } = req.body;
       const file = req.file;
 
@@ -75,8 +81,8 @@ export class EvidenceController {
 
       let attachedDocId = providedDocId || null;
 
-      // If a real evidentiary file was uploaded, ingest it into the central repository
-      if (file) {
+      // If an evidentiary file or chunked storage artifact was uploaded, ingest it into repository
+      if (file || storagePath || uploadId) {
         let subCategory = 'Digital Forensic Exhibit';
         if (category === 'DIGITAL') subCategory = 'Digital Forensic Exhibit';
         else if (category === 'DOCUMENTARY') subCategory = 'Documentary Evidence Exhibit';
@@ -87,16 +93,24 @@ export class EvidenceController {
           userId: user.id,
           userRole: user.role,
           departmentId: user.departmentId,
-          file: {
-            originalname: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size,
-            buffer: file.buffer,
-          },
+          file: file
+            ? {
+                originalname: file.originalname,
+                mimetype: file.mimetype,
+                size: file.size,
+                buffer: file.buffer,
+              }
+            : undefined,
+          uploadId,
+          storagePath,
+          fileName: fileName || (file ? file.originalname : title),
+          fileSize: fileSize ? parseInt(String(fileSize), 10) : file ? file.size : 0,
+          mimeType: mimeType || (file ? file.mimetype : 'application/octet-stream'),
+          sha256Hash: sha256,
           title: title.trim(),
           documentType: 'EVIDENCE',
           subCategory,
-          changeSummary: `Seized exhibit payload: ${file.originalname}`,
+          changeSummary: `Seized exhibit payload: ${fileName || (file ? file.originalname : title)}`,
           ipAddress: req.ip,
           userAgent: req.headers['user-agent'],
         });

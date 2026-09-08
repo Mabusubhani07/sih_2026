@@ -135,21 +135,105 @@ export const api = {
     },
   },
 
-  // Documents
-  documents: {
-    upload: async (caseId: string, formData: FormData) => {
-      return request<Document>(`/cases/${caseId}/documents`, {
+  // Chunked Upload Subsystem for High-Performance Large Media & Files (Bypasses Vercel 4.5MB Edge Limit)
+  upload: {
+    chunk: async (formData: FormData) => {
+      return request<{
+        ready: boolean;
+        uploadId: string;
+        chunkIndex?: number;
+        totalChunks?: number;
+        storagePath?: string;
+        fileName?: string;
+        fileSize?: number;
+        mimeType?: string;
+        sha256?: string;
+      }>('/upload/chunk', {
         method: 'POST',
         body: formData,
+      });
+    },
+    uploadFileInChunks: async (
+      file: File,
+      onProgress?: (percent: number, currentChunk: number, totalChunks: number) => void
+    ) => {
+      const CHUNK_SIZE = 2.5 * 1024 * 1024; // 2.5 MB chunks strictly below Vercel's 4.5 MB function payload limit
+      const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+      const uploadId = `upl_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+      let finalResult: any = null;
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(file.size, start + CHUNK_SIZE);
+        const chunkBlob = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append('uploadId', uploadId);
+        formData.append('chunkIndex', String(i));
+        formData.append('totalChunks', String(totalChunks));
+        formData.append('fileName', file.name);
+        formData.append('mimeType', file.type || 'application/octet-stream');
+        formData.append('chunk', chunkBlob, file.name);
+
+        const res = await request<{
+          ready: boolean;
+          uploadId: string;
+          storagePath?: string;
+          fileName?: string;
+          fileSize?: number;
+          mimeType?: string;
+          sha256?: string;
+        }>('/upload/chunk', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const percent = Math.min(100, Math.round(((i + 1) / totalChunks) * 100));
+        onProgress?.(percent, i + 1, totalChunks);
+
+        if (res.ready) {
+          finalResult = res;
+        }
+      }
+
+      if (!finalResult || !finalResult.storagePath) {
+        throw new Error('Chunked file transmission completed, but server assembly failed to return a storage reference.');
+      }
+
+      return finalResult;
+    },
+  },
+
+  // Documents
+  documents: {
+    upload: async (caseId: string, data: FormData | Record<string, any>) => {
+      if (data instanceof FormData) {
+        return request<Document>(`/cases/${caseId}/documents`, {
+          method: 'POST',
+          body: data,
+        });
+      }
+      return request<Document>(`/cases/${caseId}/documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
       });
     },
     getById: async (id: string) => {
       return request<Document>(`/documents/${id}`);
     },
-    uploadNewVersion: async (id: string, formData: FormData) => {
+    uploadNewVersion: async (id: string, data: FormData | Record<string, any>) => {
+      if (data instanceof FormData) {
+        return request<{ document: Document; version: any }>(`/documents/${id}/versions`, {
+          method: 'POST',
+          body: data,
+        });
+      }
       return request<{ document: Document; version: any }>(`/documents/${id}/versions`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
       });
     },
     download: async (id: string, versionNumber?: number): Promise<Blob> => {
