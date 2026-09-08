@@ -83,7 +83,15 @@ export class TranscriptionService {
     try {
       await fs.promises.writeFile(tempPath, buffer);
       const pythonExe = this.getPythonPath();
-      const scriptPath = path.resolve(__dirname, '../scripts/speech_transcriber.py');
+      const scriptCandidates = [
+        path.resolve(__dirname, '../scripts/speech_transcriber.py'),
+        path.resolve(__dirname, '../../src/scripts/speech_transcriber.py'),
+        path.resolve(process.cwd(), 'server/src/scripts/speech_transcriber.py'),
+        path.resolve(process.cwd(), 'src/scripts/speech_transcriber.py'),
+        path.resolve(process.cwd(), 'server/dist/scripts/speech_transcriber.py'),
+        path.resolve(process.cwd(), 'dist/scripts/speech_transcriber.py'),
+      ];
+      const scriptPath = scriptCandidates.find((p) => fs.existsSync(p)) || scriptCandidates[0];
 
       console.log(`[Transcription] Running speech-to-text extraction on "${fileName}" via ${pythonExe}`);
       const result = await new Promise<string>((resolve, reject) => {

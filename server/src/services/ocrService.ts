@@ -1,4 +1,4 @@
-import '../utils/domMatrixPolyfill';
+import '../polyfills';
 import path from 'path';
 import fs from 'fs';
 
@@ -15,7 +15,7 @@ export interface IOCRProvider {
 }
 
 /**
- * Local OCR Provider using Tesseract.js (Pure JS/WASM engine - runs locally on Node without system binaries)
+ * Local OCR Provider using Tesseract.js (Pure JS/WASM engine - runs offline without system binaries)
  */
 export class LocalOCRProvider implements IOCRProvider {
   private static cachedWorker: any = null;
@@ -45,20 +45,44 @@ export class LocalOCRProvider implements IOCRProvider {
 
         const { createWorker } = await import('tesseract.js');
 
-        // Automatically locate local trained language models
-        const possibleLangPaths = [
+        // Locate local trained language model
+        const possibleLangDirs = [
           path.resolve(__dirname, '../../'),
           path.resolve(__dirname, '../../../'),
+          path.resolve(__dirname, '../'),
+          path.resolve(__dirname, '../../dist'),
           path.resolve(process.cwd(), 'server'),
           path.resolve(process.cwd()),
+          path.resolve(process.cwd(), 'server/dist'),
           '/var/task',
           '/var/task/server',
           '/tmp',
         ];
-        const langPath = possibleLangPaths.find((p) => fs.existsSync(path.join(p, `${lang}.traineddata`)));
-        const cachePath = process.env.VERCEL === '1' ? '/tmp' : undefined;
 
+        let langPath: string | undefined;
+        for (const dir of possibleLangDirs) {
+          const candidate = path.join(dir, `${lang}.traineddata`);
+          if (fs.existsSync(candidate)) {
+            langPath = dir;
+            // On Vercel / Linux, ensure file is accessible in /tmp if running in read-only environment
+            if (process.env.VERCEL === '1' && dir !== '/tmp') {
+              try {
+                const tmpDest = path.join('/tmp', `${lang}.traineddata`);
+                if (!fs.existsSync(tmpDest)) {
+                  fs.copyFileSync(candidate, tmpDest);
+                }
+                langPath = '/tmp';
+              } catch {
+                // proceed with original dir
+              }
+            }
+            break;
+          }
+        }
+
+        const cachePath = process.env.VERCEL === '1' ? '/tmp' : undefined;
         console.log(`[OCR] Initializing Tesseract worker (lang: ${lang}, langPath: ${langPath || 'CDN/Cache'})`);
+
         const worker = await createWorker(lang, 1, {
           langPath: langPath || undefined,
           cachePath,
@@ -76,20 +100,74 @@ export class LocalOCRProvider implements IOCRProvider {
     return await this.initPromise;
   }
 
+  /**
+   * Terminate active worker and reset state (used during timeout recovery)
+   */
+  public static async resetWorker() {
+    if (this.cachedWorker) {
+      try {
+        await this.cachedWorker.terminate();
+      } catch {
+        // ignore
+      }
+      this.cachedWorker = null;
+      this.cachedLang = '';
+    }
+  }
+
   async recognize(
     imageBuffer: Buffer,
     language: string = 'eng'
   ): Promise<{ text: string; confidence: number; language: string }> {
     const lang = language.trim() || 'eng';
-    console.log(`[OCR] Local OCR running with Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes)`);
+    const isServerless = process.env.VERCEL === '1';
+    const timeoutMs = isServerless ? 22000 : 55000;
+
+    console.log(
+      `[OCR] Local OCR running with Tesseract.js (language: ${lang}, bufferSize: ${imageBuffer.length} bytes, timeout: ${timeoutMs / 1000}s)`
+    );
 
     // Queue worker execution sequentially to protect single WASM instance from concurrency collisions
     const execute = async () => {
+      let worker: any = null;
+      let timeoutHandle: NodeJS.Timeout | null = null;
+
       try {
-        const worker = await LocalOCRProvider.getWorker(lang);
-        const result = await worker.recognize(imageBuffer);
-        const rawText = result.data.text || '';
-        const confidence = typeof result.data.confidence === 'number' ? result.data.confidence : 0;
+        worker = await LocalOCRProvider.getWorker(lang);
+
+        const recognitionPromise = (async () => {
+          let result = await worker.recognize(imageBuffer);
+          let rawText = result.data.text || '';
+          let confidence = typeof result.data.confidence === 'number' ? result.data.confidence : 0;
+
+          // Retry with PSM 6 (single uniform text block) if initial pass returned sparse text on screenshot/form
+          if (rawText.trim().length < 5 && imageBuffer.length > 5000) {
+            try {
+              await worker.setParameters({ tessedit_pageseg_mode: '6' as any });
+              const retryResult = await worker.recognize(imageBuffer);
+              if ((retryResult.data.text || '').trim().length > rawText.trim().length) {
+                result = retryResult;
+                rawText = result.data.text || '';
+                confidence = typeof result.data.confidence === 'number' ? result.data.confidence : confidence;
+              }
+              // Reset to automatic page segmentation
+              await worker.setParameters({ tessedit_pageseg_mode: '3' as any });
+            } catch {
+              // ignore retry error
+            }
+          }
+
+          return { rawText, confidence };
+        })();
+
+        const timeoutPromise = new Promise<{ rawText: string; confidence: number }>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error(`Tesseract OCR operation timed out after ${timeoutMs / 1000}s`));
+          }, timeoutMs);
+        });
+
+        const { rawText, confidence } = await Promise.race([recognitionPromise, timeoutPromise]);
+        if (timeoutHandle) clearTimeout(timeoutHandle);
 
         console.log(
           `[OCR] Local OCR completed (confidence: ${confidence.toFixed(1)}%, characters: ${rawText.trim().length})`
@@ -97,24 +175,18 @@ export class LocalOCRProvider implements IOCRProvider {
 
         return {
           text: rawText.trim(),
-          confidence,
+          confidence: Math.max(0, Math.min(100, confidence)),
           language: lang,
         };
       } catch (err: any) {
-        console.warn('[OCR] Worker recognize failed, resetting worker instance:', err.message);
-        if (LocalOCRProvider.cachedWorker) {
-          try {
-            await LocalOCRProvider.cachedWorker.terminate();
-          } catch {
-            // ignore
-          }
-          LocalOCRProvider.cachedWorker = null;
-        }
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        console.warn('[OCR] Worker recognize failed or timed out, resetting worker instance:', err.message);
+        await LocalOCRProvider.resetWorker();
         throw err;
       }
     };
 
-    // Chain to recognition queue
+    // Chain to sequential recognition queue
     const queuedPromise = LocalOCRProvider.recognitionQueue.then(execute, execute);
     LocalOCRProvider.recognitionQueue = queuedPromise.catch(() => {});
     return queuedPromise;
@@ -277,9 +349,10 @@ export class OCRService {
       .join('\n\n')
       .trim();
 
+    const validResults = pageResults.filter((p) => p.confidence > 0);
     const avgConfidence =
-      pageResults.length > 0
-        ? pageResults.reduce((acc, p) => acc + p.confidence, 0) / pageResults.length
+      validResults.length > 0
+        ? validResults.reduce((acc, p) => acc + p.confidence, 0) / validResults.length
         : 0;
 
     return {

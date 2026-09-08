@@ -7,15 +7,22 @@ export interface FileValidationResult {
 }
 
 const SUPPORTED_EXTENSIONS = new Set([
-  // Documents
+  // Documents & Office
   'pdf',
   'doc',
   'docx',
+  'xls',
+  'xlsx',
+  'ppt',
+  'pptx',
   'rtf',
   'odt',
   'txt',
   'csv',
+  'tsv',
   'json',
+  'xml',
+  'html',
   'md',
   // Images
   'jpg',
@@ -49,11 +56,24 @@ const MIME_MAP: Record<string, string[]> = {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/zip',
   ],
+  xls: ['application/vnd.ms-excel', 'application/msexcel'],
+  xlsx: [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/zip',
+  ],
+  ppt: ['application/vnd.ms-powerpoint'],
+  pptx: [
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/zip',
+  ],
   rtf: ['application/rtf', 'text/rtf'],
   odt: ['application/vnd.oasis.opendocument.text'],
   txt: ['text/plain', 'text/markdown', 'application/json', 'text/csv'],
   csv: ['text/csv', 'text/plain', 'application/csv'],
+  tsv: ['text/tab-separated-values', 'text/plain'],
   json: ['application/json', 'text/plain'],
+  xml: ['application/xml', 'text/xml'],
+  html: ['text/html', 'text/plain'],
   md: ['text/markdown', 'text/plain'],
   // Images
   jpg: ['image/jpeg', 'image/jpg'],

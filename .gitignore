@@ -22,7 +22,9 @@ yarn-debug.log*
 uploads/*
 server/uploads/*
 !server/uploads/.gitkeep
-*.traineddata
+# Allow essential local trained OCR model
+!eng.traineddata
+!server/eng.traineddata
 
 # OS / Editor
 .DS_Store
