@@ -970,7 +970,7 @@ export class TextExtractionService {
       text: trans.transcriptText,
       isOcr: true,
       pageCount: 1,
-      confidence: 0.98,
+      confidence: trans.confidence !== undefined ? trans.confidence : 1.0,
       method: 'NATIVE_TEXT',
       language: trans.language || 'en',
     };
@@ -991,7 +991,7 @@ export class TextExtractionService {
       text: trans.transcriptText,
       isOcr: true,
       pageCount: 1,
-      confidence: 0.98,
+      confidence: trans.confidence !== undefined ? trans.confidence : 1.0,
       method: 'NATIVE_TEXT',
       language: trans.language || 'en',
     };

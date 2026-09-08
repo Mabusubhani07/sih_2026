@@ -237,6 +237,10 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
     const list: Array<{ time: string; startSec: number; speaker: string; text: string }> = [];
 
     for (const line of lines) {
+      if (line.includes('SECTION 65B EVIDENTIARY DECLARATION') || line.startsWith('I hereby certify')) {
+        break;
+      }
+
       if (
         line.startsWith('===') ||
         line.startsWith('---') ||
@@ -255,8 +259,7 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
         line.startsWith('Audio Track Embedded:') ||
         line.startsWith('Statutory Compliance:') ||
         line.startsWith('Transcription Engine:') ||
-        line.startsWith('Cryptographic Seal:') ||
-        line.startsWith('I hereby certify')
+        line.startsWith('Cryptographic Seal:')
       ) {
         continue;
       }
@@ -832,7 +835,7 @@ export const DocumentPreviewModal: React.FC<Props> = ({ document: initialDoc, on
                   </div>
                   {renderInteractiveTranscript(true)}
                 </div>
-              ) : activeVersion && ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'wma'].includes(activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '') ? (
+              ) : activeVersion && (['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'wma', 'webm'].includes(activeVersion.originalFileName.split('.').pop()?.toLowerCase() || '') || (activeVersion.mimeType || '').startsWith('audio/')) ? (
                 <div className="flex flex-col items-center justify-center py-6 px-4 space-y-4 w-full max-w-2xl mx-auto bg-slate-50 rounded-xl border border-slate-200 shadow-xs">
                   <div className="p-4 rounded-full bg-blue-100 text-blue-700 shadow-inner">
                     <Volume2 className="w-10 h-10" />
